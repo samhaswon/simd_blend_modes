@@ -8,6 +8,7 @@ blend_modes/
 *.pyc
 *.pyo
 *.pyd
+*.so
 src/simd_blend_modes.egg-info
 dist/
 build/
