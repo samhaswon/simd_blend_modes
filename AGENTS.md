@@ -6,27 +6,25 @@
 
 - Use the default Python `unittest` module for tests in this project.
 
-## Project Conventions
+  - Tests are run with `python3 -m unittest discover tests/`.
 
-To be determined. Edit this section when relevant.
-
-## Project Skeleton Notes
+## Project Notes
 
 - Build is wired via `pyproject.toml`, `setup.cfg`, and `setup.py` with a single extension
   module named `simd_blend_modes._simd_blend_modes`.
 - C kernels live in `src/simd_blend_modes/kernels`, one file per blend mode, with a shared
   helper in `src/simd_blend_modes/kernels/blend_common.h`.
-- Stub kernels currently return the first image argument; they accept 3 or 4 positional args
-  to match `(background, foreground, opacity)`.
+- Scalar kernels are fully implemented for all blend modes; SIMD paths are scaffolded but not
+  yet implemented.
 - Blend modes identified from `blend_modes/blend_modes/blending_functions.py`:
   `normal`, `soft_light`, `lighten_only`, `screen`, `dodge`, `addition`, `darken_only`,
   `multiply`, `hard_light`, `difference`, `subtract`, `grain_extract`, `grain_merge`,
   `divide`, `overlay`.
-- Tests in `tests/test_blend_modes.py` are skeleton `unittest` cases with TODO skips for the
-  exhaustive uint8 sweep, float32 handling, and performance comparisons.
 - Scalar kernels now implement the blend math from `blend_modes/blend_modes/blending_functions.py`
   for uint8/float32 NumPy arrays; output dtype and channel count match the background image, missing
   alpha channels are treated as 255 (opaque), and opacity defaults to 1.0 when omitted.
+- Tests in `tests/test_blend_modes.py` now include full exhaustive uint8 and float32 RGBA sweeps
+  (chunked for memory) plus parity checks against the reference implementation.
 
 
 ## Code Style
