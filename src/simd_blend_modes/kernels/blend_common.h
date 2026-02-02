@@ -835,7 +835,7 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
             }
 
             __m256 comp_alpha = _mm256_mul_ps(_mm256_min_ps(in_a, layer_a), opacity256);
-            __m256 new_alpha = _mm256_add_ps(in_a, _mm256_mul_ps(_mm256_sub_ps(one256, in_a), comp_alpha));
+            __m256 new_alpha = mul_add_ps256(_mm256_sub_ps(one256, in_a), comp_alpha, in_a);
             __m256 ratio = _mm256_div_ps(comp_alpha, new_alpha);
             __m256 mask = _mm256_cmp_ps(new_alpha, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
             ratio = _mm256_blendv_ps(_mm256_set1_ps(0.0f), ratio, mask);
@@ -844,11 +844,11 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
             __m256 comp_g = comp_avx(in_g, layer_g);
             __m256 comp_b = comp_avx(in_b, layer_b);
 
-            __m256 out_r = _mm256_add_ps(_mm256_mul_ps(comp_r, ratio),
+            __m256 out_r = mul_add_ps256(comp_r, ratio,
                                          _mm256_mul_ps(in_r, _mm256_sub_ps(one256, ratio)));
-            __m256 out_g = _mm256_add_ps(_mm256_mul_ps(comp_g, ratio),
+            __m256 out_g = mul_add_ps256(comp_g, ratio,
                                          _mm256_mul_ps(in_g, _mm256_sub_ps(one256, ratio)));
-            __m256 out_b = _mm256_add_ps(_mm256_mul_ps(comp_b, ratio),
+            __m256 out_b = mul_add_ps256(comp_b, ratio,
                                          _mm256_mul_ps(in_b, _mm256_sub_ps(one256, ratio)));
 
             if (clip_output) {
@@ -901,7 +901,7 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
             }
 
             __m128 comp_alpha = _mm_mul_ps(_mm_min_ps(in_a, layer_a), opacity128);
-            __m128 new_alpha = _mm_add_ps(in_a, _mm_mul_ps(_mm_sub_ps(one, in_a), comp_alpha));
+            __m128 new_alpha = mul_add_ps128(_mm_sub_ps(one, in_a), comp_alpha, in_a);
             __m128 ratio = _mm_div_ps(comp_alpha, new_alpha);
             __m128 mask = _mm_cmpgt_ps(new_alpha, _mm_set1_ps(0.0f));
             ratio = _mm_blendv_ps(_mm_set1_ps(0.0f), ratio, mask);
@@ -910,12 +910,12 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
             __m128 comp_g = comp_sse(in_g, layer_g);
             __m128 comp_b = comp_sse(in_b, layer_b);
 
-            __m128 out_r = _mm_add_ps(_mm_mul_ps(comp_r, ratio),
-                                      _mm_mul_ps(in_r, _mm_sub_ps(one, ratio)));
-            __m128 out_g = _mm_add_ps(_mm_mul_ps(comp_g, ratio),
-                                      _mm_mul_ps(in_g, _mm_sub_ps(one, ratio)));
-            __m128 out_b = _mm_add_ps(_mm_mul_ps(comp_b, ratio),
-                                      _mm_mul_ps(in_b, _mm_sub_ps(one, ratio)));
+            __m128 out_r = mul_add_ps128(comp_r, ratio,
+                                         _mm_mul_ps(in_r, _mm_sub_ps(one, ratio)));
+            __m128 out_g = mul_add_ps128(comp_g, ratio,
+                                         _mm_mul_ps(in_g, _mm_sub_ps(one, ratio)));
+            __m128 out_b = mul_add_ps128(comp_b, ratio,
+                                         _mm_mul_ps(in_b, _mm_sub_ps(one, ratio)));
 
             if (clip_output) {
                 out_r = _mm_min_ps(_mm_max_ps(out_r, _mm_set1_ps(0.0f)), _mm_set1_ps(1.0f));
@@ -1068,16 +1068,17 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
             }
             __m256 layer_opacity = _mm256_mul_ps(layer_a, opacity256);
 
-            __m256 denom = _mm256_add_ps(layer_opacity,
-                                         _mm256_mul_ps(in_a, _mm256_sub_ps(one256, layer_opacity)));
+            __m256 denom = mul_add_ps256(in_a, _mm256_sub_ps(one256, layer_opacity), layer_opacity);
             __m256 mask = _mm256_cmp_ps(denom, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
 
-            __m256 num_r = _mm256_add_ps(_mm256_mul_ps(layer_r, layer_opacity),
-                                         _mm256_mul_ps(in_r, _mm256_mul_ps(in_a, _mm256_sub_ps(one256, layer_opacity))));
-            __m256 num_g = _mm256_add_ps(_mm256_mul_ps(layer_g, layer_opacity),
-                                         _mm256_mul_ps(in_g, _mm256_mul_ps(in_a, _mm256_sub_ps(one256, layer_opacity))));
-            __m256 num_b = _mm256_add_ps(_mm256_mul_ps(layer_b, layer_opacity),
-                                         _mm256_mul_ps(in_b, _mm256_mul_ps(in_a, _mm256_sub_ps(one256, layer_opacity))));
+            __m256 layer_r_opacity = _mm256_mul_ps(layer_r, layer_opacity);
+            __m256 layer_g_opacity = _mm256_mul_ps(layer_g, layer_opacity);
+            __m256 layer_b_opacity = _mm256_mul_ps(layer_b, layer_opacity);
+            __m256 inv_layer_opacity = _mm256_sub_ps(one256, layer_opacity);
+            __m256 in_a_scaled = _mm256_mul_ps(in_a, inv_layer_opacity);
+            __m256 num_r = mul_add_ps256(in_r, in_a_scaled, layer_r_opacity);
+            __m256 num_g = mul_add_ps256(in_g, in_a_scaled, layer_g_opacity);
+            __m256 num_b = mul_add_ps256(in_b, in_a_scaled, layer_b_opacity);
 
             __m256 out_r = _mm256_div_ps(num_r, denom);
             __m256 out_g = _mm256_div_ps(num_g, denom);
@@ -1086,8 +1087,7 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
             out_g = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_g, mask);
             out_b = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_b, mask);
 
-            __m256 out_a = _mm256_add_ps(layer_opacity,
-                                         _mm256_mul_ps(in_a, _mm256_sub_ps(one256, layer_opacity)));
+            __m256 out_a = mul_add_ps256(in_a, _mm256_sub_ps(one256, layer_opacity), layer_opacity);
 
             if (output.is_uint8 && output.channels == 4) {
                 store_rgba8_u8(&output, index, out_r, out_g, out_b, out_a);
@@ -1133,16 +1133,17 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
             }
             __m128 layer_opacity = _mm_mul_ps(layer_a, opacity128);
 
-            __m128 denom = _mm_add_ps(layer_opacity,
-                                      _mm_mul_ps(in_a, _mm_sub_ps(one, layer_opacity)));
+            __m128 denom = mul_add_ps128(in_a, _mm_sub_ps(one, layer_opacity), layer_opacity);
             __m128 mask = _mm_cmpgt_ps(denom, _mm_set1_ps(0.0f));
 
-            __m128 num_r = _mm_add_ps(_mm_mul_ps(layer_r, layer_opacity),
-                                      _mm_mul_ps(in_r, _mm_mul_ps(in_a, _mm_sub_ps(one, layer_opacity))));
-            __m128 num_g = _mm_add_ps(_mm_mul_ps(layer_g, layer_opacity),
-                                      _mm_mul_ps(in_g, _mm_mul_ps(in_a, _mm_sub_ps(one, layer_opacity))));
-            __m128 num_b = _mm_add_ps(_mm_mul_ps(layer_b, layer_opacity),
-                                      _mm_mul_ps(in_b, _mm_mul_ps(in_a, _mm_sub_ps(one, layer_opacity))));
+            __m128 layer_r_opacity = _mm_mul_ps(layer_r, layer_opacity);
+            __m128 layer_g_opacity = _mm_mul_ps(layer_g, layer_opacity);
+            __m128 layer_b_opacity = _mm_mul_ps(layer_b, layer_opacity);
+            __m128 inv_layer_opacity = _mm_sub_ps(one, layer_opacity);
+            __m128 in_a_scaled = _mm_mul_ps(in_a, inv_layer_opacity);
+            __m128 num_r = mul_add_ps128(in_r, in_a_scaled, layer_r_opacity);
+            __m128 num_g = mul_add_ps128(in_g, in_a_scaled, layer_g_opacity);
+            __m128 num_b = mul_add_ps128(in_b, in_a_scaled, layer_b_opacity);
 
             __m128 out_r = _mm_div_ps(num_r, denom);
             __m128 out_g = _mm_div_ps(num_g, denom);
@@ -1151,8 +1152,7 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
             out_g = _mm_blendv_ps(_mm_set1_ps(0.0f), out_g, mask);
             out_b = _mm_blendv_ps(_mm_set1_ps(0.0f), out_b, mask);
 
-            __m128 out_a = _mm_add_ps(layer_opacity,
-                                      _mm_mul_ps(in_a, _mm_sub_ps(one, layer_opacity)));
+            __m128 out_a = mul_add_ps128(in_a, _mm_sub_ps(one, layer_opacity), layer_opacity);
 
             if (output.is_uint8 && output.channels == 4) {
                 store_rgba4_u8(&output, index, out_r, out_g, out_b, out_a);
