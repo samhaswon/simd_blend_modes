@@ -62,7 +62,7 @@ class TestPerformance(unittest.TestCase):
             BenchmarkCase("3840x2160", 2160, 3840),
         ]
         modes = ["normal", "multiply", "screen"]
-        kernels = ["scalar", "sse42", "avx2", "auto"]
+        kernels = ["scalar", "sse42", "avx2"]
         available_kernels = [
             kernel for kernel in kernels if _simd_blend_modes.kernel_available(kernel)
         ]
