@@ -92,13 +92,21 @@ class TestBlendModes(unittest.TestCase):
             blended = blended[:, :, :3]
         return blended
 
-    def _assert_close(self, actual: np.ndarray, expected: np.ndarray) -> None:
+    def _assert_close(
+        self,
+        actual: np.ndarray,
+        expected: np.ndarray,
+        context: str = "",
+    ) -> None:
         diff = np.abs(actual.astype(np.float32) - expected.astype(np.float32))
         max_diff = np.max(diff)
+        message = f"max diff {max_diff} exceeded tolerance"
+        if context:
+            message = f"{context}: {message}"
         self.assertLessEqual(
             max_diff,
             1.0,
-            msg=f"max diff {max_diff} exceeded tolerance",
+            msg=message,
         )
 
     def test_blend_modes(self) -> None:
@@ -126,22 +134,32 @@ class TestBlendModes(unittest.TestCase):
                         self.foreground_values,
                     )
                     for opacity in opacities:
-                        expected = self._reference_blend(
-                            mode_name,
-                            background,
-                            foreground,
-                            opacity,
-                            background_channels,
-                        )
+                        if opacity == 0.0:
+                            expected = background
+                        else:
+                            expected = self._reference_blend(
+                                mode_name,
+                                background,
+                                foreground,
+                                opacity,
+                                background_channels,
+                            )
                         actual = func(background, foreground, float(opacity))
-                        self._assert_close(actual, expected)
+                        context = (
+                            f"{mode_name} bg={background_dtype.__name__} "
+                            f"fg={foreground_dtype.__name__} "
+                            f"bg_ch={background_channels} "
+                            f"fg_ch={foreground_channels} "
+                            f"opacity={opacity}"
+                        )
+                        self._assert_close(actual, expected, context=context)
 
     def test_opacity_default(self) -> None:
         background = self._make_image(3, np.uint8, self.background_values)
         foreground = self._make_image(3, np.uint8, self.foreground_values)
         expected = self._reference_blend("normal", background, foreground, 1.0, 3)
         actual = simd_blend_modes.normal(background, foreground)
-        self._assert_close(actual, expected)
+        self._assert_close(actual, expected, context="normal opacity default")
 
     def test_output_dtype_matches_background(self) -> None:
         background_u8 = self._make_image(3, np.uint8, self.background_values)
@@ -158,7 +176,7 @@ class TestBlendModes(unittest.TestCase):
         background = self._make_image(4, np.float32, self.background_values)
         foreground = self._make_image(4, np.float32, self.foreground_values)
         out = simd_blend_modes.multiply(background, foreground, 0.0)
-        self._assert_close(out, background)
+        self._assert_close(out, background, context="opacity zero returns background")
 
 
 if __name__ == "__main__":

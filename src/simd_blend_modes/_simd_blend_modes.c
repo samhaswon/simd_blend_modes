@@ -1,5 +1,7 @@
+#define NPY_NO_DEPRECATED_API NPY_1_7_API_VERSION
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#define PY_ARRAY_UNIQUE_SYMBOL SIMD_BLEND_MODES_ARRAY_API
 #include <numpy/arrayobject.h>
 
 PyObject *blend_normal(PyObject *self, PyObject *args);
@@ -52,7 +54,10 @@ PyMODINIT_FUNC PyInit__simd_blend_modes(void)
         return NULL;
     }
 
-    import_array();
+    if (_import_array() < 0) {
+        Py_DECREF(module);
+        return NULL;
+    }
 
     return module;
 }

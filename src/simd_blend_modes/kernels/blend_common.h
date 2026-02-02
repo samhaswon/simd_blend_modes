@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#define NO_IMPORT_ARRAY
+#define PY_ARRAY_UNIQUE_SYMBOL SIMD_BLEND_MODES_ARRAY_API
 #include <numpy/arrayobject.h>
 
 /* ----- Runtime CPU feature detection (GCC/Clang + MSVC) ----- */
@@ -259,6 +261,14 @@ static PyObject *blend_ratio_mode(PyObject *args, blend_comp_fn comp_fn, int cli
         npy_intp bg_offset = index * background.channels;
         npy_intp fg_offset = index * foreground.channels;
 
+        if (opacity <= 0.0f) {
+            for (int c = 0; c < background.channels; ++c) {
+                float value = read_channel(&background, bg_offset + c);
+                write_channel(&output, bg_offset + c, value);
+            }
+            continue;
+        }
+
         float in_a = 1.0f;
         float layer_a = 1.0f;
 
@@ -270,13 +280,6 @@ static PyObject *blend_ratio_mode(PyObject *args, blend_comp_fn comp_fn, int cli
         }
 
         float comp_alpha = fminf(in_a, layer_a) * opacity;
-        if (comp_alpha <= 0.0f) {
-            for (int c = 0; c < background.channels; ++c) {
-                float value = read_channel(&background, bg_offset + c);
-                write_channel(&output, bg_offset + c, value);
-            }
-            continue;
-        }
 
         float new_alpha = in_a + (1.0f - in_a) * comp_alpha;
         float ratio = 0.0f;
@@ -336,6 +339,14 @@ static PyObject *blend_normal_mode(PyObject *args) {
         npy_intp bg_offset = index * background.channels;
         npy_intp fg_offset = index * foreground.channels;
 
+        if (opacity <= 0.0f) {
+            for (int c = 0; c < background.channels; ++c) {
+                float value = read_channel(&background, bg_offset + c);
+                write_channel(&output, bg_offset + c, value);
+            }
+            continue;
+        }
+
         float in_a = 1.0f;
         float layer_a = 1.0f;
 
@@ -347,13 +358,6 @@ static PyObject *blend_normal_mode(PyObject *args) {
         }
 
         float layer_opacity = layer_a * opacity;
-        if (layer_opacity <= 0.0f) {
-            for (int c = 0; c < background.channels; ++c) {
-                float value = read_channel(&background, bg_offset + c);
-                write_channel(&output, bg_offset + c, value);
-            }
-            continue;
-        }
 
         float denom = layer_opacity + in_a * (1.0f - layer_opacity);
         for (int c = 0; c < 3; ++c) {
