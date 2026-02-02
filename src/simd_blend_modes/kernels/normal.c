@@ -2,5 +2,5 @@
 
 PyObject *blend_normal(PyObject *self, PyObject *args)
 {
-    return blend_return_background(args);
+    return blend_normal_mode(args);
 }

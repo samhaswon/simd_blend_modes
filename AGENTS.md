@@ -2,6 +2,8 @@
 
 ## Testing
 
+- Build and install with `pip install --force-reinstall -e .`.
+
 - Use the default Python `unittest` module for tests in this project.
 
 ## Project Conventions
@@ -22,6 +24,9 @@ To be determined. Edit this section when relevant.
   `divide`, `overlay`.
 - Tests in `tests/test_blend_modes.py` are skeleton `unittest` cases with TODO skips for the
   exhaustive uint8 sweep, float32 handling, and performance comparisons.
+- Scalar kernels now implement the blend math from `blend_modes/blend_modes/blending_functions.py`
+  for uint8/float32 NumPy arrays; output dtype and channel count match the background image, missing
+  alpha channels are treated as 255 (opaque), and opacity defaults to 1.0 when omitted.
 
 
 ## Code Style

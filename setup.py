@@ -1,5 +1,7 @@
 from setuptools import Extension, setup
 
+import numpy
+
 KERNEL_SOURCES = [
     "src/simd_blend_modes/kernels/normal.c",
     "src/simd_blend_modes/kernels/soft_light.c",
@@ -21,7 +23,7 @@ KERNEL_SOURCES = [
 extension = Extension(
     "simd_blend_modes._simd_blend_modes",
     sources=["src/simd_blend_modes/_simd_blend_modes.c", *KERNEL_SOURCES],
-    include_dirs=["src/simd_blend_modes/kernels"],
+    include_dirs=[numpy.get_include(), "src/simd_blend_modes/kernels"],
 )
 
 setup(ext_modules=[extension])

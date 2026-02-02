@@ -1,5 +1,6 @@
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
+#include <numpy/arrayobject.h>
 
 PyObject *blend_normal(PyObject *self, PyObject *args);
 PyObject *blend_soft_light(PyObject *self, PyObject *args);
@@ -46,5 +47,12 @@ static struct PyModuleDef module_def = {
 
 PyMODINIT_FUNC PyInit__simd_blend_modes(void)
 {
-    return PyModule_Create(&module_def);
+    PyObject *module = PyModule_Create(&module_def);
+    if (!module) {
+        return NULL;
+    }
+
+    import_array();
+
+    return module;
 }
