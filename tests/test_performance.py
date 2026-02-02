@@ -243,7 +243,7 @@ class TestPerformance(unittest.TestCase):
 
         print("")
         print("<details>")
-        print("<summary>Per-kernel results</summary>")
+        print("<summary>Per-kernel, size, and type results</summary>")
         print("")
         print(_format_row(headers))
         print(_format_row(["-" * width for width in widths]))

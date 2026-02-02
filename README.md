@@ -5,12 +5,22 @@ This project reimplements the blend modes from [`blend_modes`](https://github.co
 and returns output dtype/channel count matching the background image. Missing alpha channels
 are treated as fully opaque (255). Opacity defaults to 1.0.
 
-This is mostly intended to be a drop-in replacement, but with a more permissive API that allows you to go faster if you don't need FP32 arrays.
+This is mostly intended to be a drop-in replacement, but with a more permissive API that allows you to go faster if you don't 
+need FP32 arrays or the information of an Alpha channel.
 
 ## Build and Install
 
+### General
+
 ```bash
-python3 -m pip install -e .
+pip install simd-blend-modes
+```
+
+### Development
+
+```bash
+pip install -r requirements-dev.txt
+pip install -e .
 ```
 
 ## Usage
@@ -25,7 +35,35 @@ foreground = np.zeros((512, 512, 4), dtype=np.uint8)
 out = sbm.screen(background, foreground, 0.5)
 ```
 
-You can force a kernel by passing a string (or `KernelKind`):
+Inputs:
+
+- Dtypes: `np.uint8` or `np.float32` only.
+- Value range: 0..255 for both dtypes.
+  - This expects float32 inputs to be cast from uint8, not normalized as well.
+- Shapes: `H x W x C` with `C` = 3 (RGB) or 4 (RGBA).
+- Output: dtype and channel count match the background image.
+- Alpha: if a source is RGB (3 channels), alpha is treated as 255 (fully opaque).
+- Opacity: the third argument is optional; defaults to `1.0`.
+
+Supported blend modes:
+
+- [`normal`](https://en.wikipedia.org/wiki/Blend_modes#Normal_blend_mode)
+- [`soft_light`](https://en.wikipedia.org/wiki/Blend_modes#Soft_Light)
+- [`lighten_only`](https://en.wikipedia.org/wiki/Blend_modes#Lighten_Only)
+- [`screen`](https://en.wikipedia.org/wiki/Blend_modes#Screen)
+- [`dodge`](https://en.wikipedia.org/wiki/Blend_modes#Dodge_and_burn)
+- [`addition`](https://en.wikipedia.org/wiki/Blend_modes#Addition)
+- [`darken_only`](https://en.wikipedia.org/wiki/Blend_modes#Darken_Only)
+- [`multiply`](https://en.wikipedia.org/wiki/Blend_modes#Multiply)
+- [`hard_light`](https://en.wikipedia.org/wiki/Blend_modes#Hard_Light)
+- [`difference`](https://en.wikipedia.org/wiki/Blend_modes#Difference)
+- [`subtract`](https://en.wikipedia.org/wiki/Blend_modes#Subtract)
+- `grain_extract` (known from GIMP)
+- `grain_merge` (known from GIMP)
+- [`divide`](https://en.wikipedia.org/wiki/Blend_modes#Divide)
+- [`overlay`](https://en.wikipedia.org/wiki/Blend_modes#Overlay)
+
+You can force a kernel by passing a string (or `KernelKind` value):
 
 ```python
 out = sbm.screen(background, foreground, 0.5, "avx2")
@@ -131,7 +169,7 @@ This is incredibly slow. I wouldn't actually do this, but it's here.
 | overlay       | avx2   | 0.264969 | 0.010714   | 24.73x  | -95.96%        |
 
 <details>
-<summary>Per-kernel results</summary>
+<summary>Per-kernel, size, and type results</summary>
 
 | Case      | Input   | Mode          | Kernel | Ref (s)  | Kernel (s) | Speedup | Percent Change |
 | --------- | ------- | ------------- | ------ | -------- | ---------- | ------- | -------------- |
