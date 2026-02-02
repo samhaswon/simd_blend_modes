@@ -1,1 +1,2 @@
 blend_modes==2.2.0
+opencv-python
