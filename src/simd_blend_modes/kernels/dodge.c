@@ -1,6 +1,6 @@
 #include "blend_common.h"
 
-static float dodge_comp(float in_c, float layer_c)
+static inline float dodge_comp(float in_c, float layer_c)
 {
     float denom = 1.0f - layer_c;
     if (denom <= 0.0f) {
@@ -13,7 +13,7 @@ static float dodge_comp(float in_c, float layer_c)
     return value;
 }
 
-static __m128 dodge_comp_ps128(__m128 in_c, __m128 layer_c)
+static inline __m128 dodge_comp_ps128(__m128 in_c, __m128 layer_c)
 {
     __m128 denom = _mm_sub_ps(_mm_set1_ps(1.0f), layer_c);
     __m128 value = _mm_div_ps(in_c, denom);
@@ -27,7 +27,7 @@ static __m128 dodge_comp_ps128(__m128 in_c, __m128 layer_c)
     return value;
 }
 
-static __m256 dodge_comp_ps256(__m256 in_c, __m256 layer_c)
+static inline __m256 dodge_comp_ps256(__m256 in_c, __m256 layer_c)
 {
     __m256 denom = _mm256_sub_ps(_mm256_set1_ps(1.0f), layer_c);
     __m256 value = _mm256_div_ps(in_c, denom);

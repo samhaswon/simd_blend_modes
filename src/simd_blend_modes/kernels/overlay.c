@@ -1,6 +1,6 @@
 #include "blend_common.h"
 
-static float overlay_comp(float in_c, float layer_c)
+static inline float overlay_comp(float in_c, float layer_c)
 {
     if (in_c < 0.5f) {
         return 2.0f * in_c * layer_c;
@@ -8,7 +8,7 @@ static float overlay_comp(float in_c, float layer_c)
     return 1.0f - (2.0f * (1.0f - in_c) * (1.0f - layer_c));
 }
 
-static __m128 overlay_comp_ps128(__m128 in_c, __m128 layer_c)
+static inline __m128 overlay_comp_ps128(__m128 in_c, __m128 layer_c)
 {
     __m128 half = _mm_set1_ps(0.5f);
     __m128 mask = _mm_cmplt_ps(in_c, half);
@@ -20,7 +20,7 @@ static __m128 overlay_comp_ps128(__m128 in_c, __m128 layer_c)
     return _mm_blendv_ps(high, low, mask);
 }
 
-static __m256 overlay_comp_ps256(__m256 in_c, __m256 layer_c)
+static inline __m256 overlay_comp_ps256(__m256 in_c, __m256 layer_c)
 {
     __m256 half = _mm256_set1_ps(0.5f);
     __m256 mask = _mm256_cmp_ps(in_c, half, _CMP_LT_OQ);

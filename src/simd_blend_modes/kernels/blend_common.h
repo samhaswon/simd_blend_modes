@@ -425,7 +425,7 @@ static inline void release_blend_inputs(BlendArray *background, BlendArray *fore
     Py_DECREF(foreground->array);
 }
 
-static int parse_blend_inputs(PyObject *args,
+static inline int parse_blend_inputs(PyObject *args,
                               BlendArray *background,
                               BlendArray *foreground,
                               float *opacity,
@@ -572,7 +572,7 @@ static inline int copy_background(const BlendArray *background, BlendOutput *out
     return 1;
 }
 
-static PyObject *blend_ratio_mode_simd(PyObject *args,
+static inline PyObject *blend_ratio_mode_simd(PyObject *args,
                                        blend_comp_fn comp_scalar,
                                        blend_comp_fn128 comp_sse,
                                        blend_comp_fn256 comp_avx,
@@ -737,7 +737,7 @@ static PyObject *blend_ratio_mode_simd(PyObject *args,
     return (PyObject *)output.array;
 }
 
-static PyObject *blend_normal_mode(PyObject *args) {
+static inline PyObject *blend_normal_mode(PyObject *args) {
     BlendArray background = {0};
     BlendArray foreground = {0};
     float opacity = 0.0f;
