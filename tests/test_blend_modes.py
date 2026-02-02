@@ -154,6 +154,85 @@ class TestBlendModes(unittest.TestCase):
                         )
                         self._assert_close(actual, expected, context=context)
 
+    def test_exhaustive_uint8_values(self) -> None:
+        values = np.arange(256, dtype=np.uint8)
+        values_rev = values[::-1]
+        chunk_size = 64
+        opacities = [0.25, 0.75]
+        channel_pairs = [(3, 3), (4, 4)]
+
+        for mode_name in BLEND_MODE_NAMES:
+            func = getattr(simd_blend_modes, mode_name)
+            for background_channels, foreground_channels in channel_pairs:
+                for opacity in opacities:
+                    for start in range(0, 256, chunk_size):
+                        end = start + chunk_size
+                        bg_vals = values[start:end]
+                        fg_vals = values_rev[start:end]
+                        background = np.stack([bg_vals, bg_vals, bg_vals], axis=1).astype(
+                            np.uint8
+                        )
+                        foreground = np.stack([fg_vals, fg_vals, fg_vals], axis=1).astype(
+                            np.uint8
+                        )
+                        background = background[:, None, :]
+                        foreground = foreground[:, None, :]
+                        if background_channels == 4:
+                            alpha = np.full((background.shape[0], 1, 1), 255, dtype=np.uint8)
+                            background = np.concatenate([background, alpha], axis=2)
+                        if foreground_channels == 4:
+                            alpha = np.full((foreground.shape[0], 1, 1), 255, dtype=np.uint8)
+                            foreground = np.concatenate([foreground, alpha], axis=2)
+                        expected = self._reference_blend(
+                            mode_name,
+                            background,
+                            foreground,
+                            opacity,
+                            background_channels,
+                        )
+                        actual = func(background, foreground, float(opacity))
+                        context = (
+                            f"{mode_name} uint8 sweep bg_ch={background_channels} "
+                            f"fg_ch={foreground_channels} opacity={opacity} "
+                            f"range={start}-{end - 1}"
+                        )
+                        self._assert_close(actual, expected, context=context)
+
+    def test_exhaustive_float32_values(self) -> None:
+        values = np.arange(256, dtype=np.float32)
+        values_rev = values[::-1]
+        chunk_size = 64
+        opacities = [0.25, 0.75]
+
+        for mode_name in BLEND_MODE_NAMES:
+            func = getattr(simd_blend_modes, mode_name)
+            for opacity in opacities:
+                for start in range(0, 256, chunk_size):
+                    end = start + chunk_size
+                    bg_vals = values[start:end]
+                    fg_vals = values_rev[start:end]
+                    background = np.stack([bg_vals, bg_vals, bg_vals], axis=1).astype(
+                        np.float32
+                    )
+                    foreground = np.stack([fg_vals, fg_vals, fg_vals], axis=1).astype(
+                        np.float32
+                    )
+                    background = background[:, None, :]
+                    foreground = foreground[:, None, :]
+                    expected = self._reference_blend(
+                        mode_name,
+                        background,
+                        foreground,
+                        opacity,
+                        3,
+                    )
+                    actual = func(background, foreground, float(opacity))
+                    context = (
+                        f"{mode_name} float32 sweep bg_ch=3 fg_ch=3 opacity={opacity} "
+                        f"range={start}-{end - 1}"
+                    )
+                    self._assert_close(actual, expected, context=context)
+
     def test_opacity_default(self) -> None:
         background = self._make_image(3, np.uint8, self.background_values)
         foreground = self._make_image(3, np.uint8, self.foreground_values)

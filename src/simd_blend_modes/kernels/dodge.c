@@ -4,7 +4,7 @@ static float dodge_comp(float in_c, float layer_c)
 {
     float denom = 1.0f - layer_c;
     if (denom <= 0.0f) {
-        return 1.0f;
+        return in_c <= 0.0f ? 0.0f : 1.0f;
     }
     float value = in_c / denom;
     if (value > 1.0f) {
