@@ -130,7 +130,7 @@ static PyMethodDef module_methods[] = {
 static struct PyModuleDef module_def = {
     PyModuleDef_HEAD_INIT,
     "_simd_blend_modes",
-    "SIMD blend mode kernels (skeleton).",
+    "SIMD blend modes",
     -1,
     module_methods,
 };
