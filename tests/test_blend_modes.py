@@ -238,6 +238,32 @@ class TestBlendModes(unittest.TestCase):
                     )
                     self._assert_close(actual, expected, context=context)
 
+    def test_input_shape_validation(self) -> None:
+        valid_background = np.ones((2, 2, 3), dtype=np.uint8)
+        valid_foreground = np.ones((2, 2, 3), dtype=np.uint8)
+        func = simd_blend_modes.normal
+
+        with self.assertRaises(ValueError):
+            func(valid_background[:1, :2], valid_foreground[:, :, :])
+
+        with self.assertRaises(ValueError):
+            func(valid_background, valid_foreground[:1, :, :])
+
+        with self.assertRaises(ValueError):
+            func(valid_background, valid_foreground[:, :1, :])
+
+        with self.assertRaises(ValueError):
+            func(np.zeros((2, 2), dtype=np.uint8), valid_foreground)
+
+        with self.assertRaises(ValueError):
+            func(valid_background, np.zeros((2, 2, 3, 1), dtype=np.uint8))
+
+        with self.assertRaises(ValueError):
+            func(np.zeros((2, 2, 2), dtype=np.uint8), valid_foreground)
+
+        with self.assertRaises(ValueError):
+            func(np.zeros((2, 2, 5), dtype=np.uint8), valid_foreground)
+
     def test_opacity_default(self) -> None:
         background = self._make_image(3, np.uint8, self.background_values)
         foreground = self._make_image(3, np.uint8, self.foreground_values)
