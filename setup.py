@@ -12,7 +12,7 @@ if sys.platform == "win32":
     extra_compile_args += ["/O2", "/arch:AVX2", "/Qpar"]  # enables AVX/AVX2; SSE4.2 implied
 elif "arm" in arch or "aarch64" in arch:
     # Likely won't compile on ARM, but just in case
-    extra_compile_args += ["-O3"]
+    extra_compile_args += ["-O3", "-flto", "-ffp-contract=fast",]
 else:
     extra_compile_args += ["-O3", "-march=x86-64", "-mavx2", "-msse4.2", "-flto", "-mfma", "-ffp-contract=fast",]
 

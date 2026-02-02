@@ -17,6 +17,7 @@ static inline float hard_light_comp(float in_c, float layer_c)
     return value;
 }
 
+#if SIMD_BLEND_MODES_X86
 static inline __m128 hard_light_comp_ps128(__m128 in_c, __m128 layer_c)
 {
     __m128 half = _mm_set1_ps(0.5f);
@@ -46,9 +47,14 @@ static inline __m256 hard_light_comp_ps256(__m256 in_c, __m256 layer_c)
     high = _mm256_min_ps(high, _mm256_set1_ps(1.0f));
     return _mm256_blendv_ps(low, high, mask);
 }
+#endif
 
 PyObject *blend_hard_light(PyObject *self, PyObject *args)
 {
-    return blend_ratio_mode_simd(args, hard_light_comp, hard_light_comp_ps128,
-                                 hard_light_comp_ps256, 0);
+    return blend_ratio_mode_simd(
+        args,
+        hard_light_comp,
+        SIMD_BLEND_MODES_SIMD_ARGS(hard_light_comp_ps128, hard_light_comp_ps256),
+        0
+    );
 }

@@ -5,8 +5,14 @@
 #define PY_ARRAY_UNIQUE_SYMBOL SIMD_BLEND_MODES_ARRAY_API
 #include <numpy/arrayobject.h>
 
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+  #define SIMD_BLEND_MODES_X86 1
+#else
+  #define SIMD_BLEND_MODES_X86 0
+#endif
+
 /* ----- Runtime CPU feature detection (GCC/Clang + MSVC) ----- */
-#if defined(_MSC_VER)
+#if SIMD_BLEND_MODES_X86 && defined(_MSC_VER)
   #include <intrin.h>
   static int os_supports_avx(void) {
       int cpuInfo[4];
@@ -38,7 +44,7 @@
       int ecx = cpuInfo[2];
       return (ecx >> 20) & 1;
   }
-#else
+#elif SIMD_BLEND_MODES_X86
   static int os_supports_avx(void) {
   #if defined(__GNUC__) || defined(__clang__)
       return 1;
@@ -62,6 +68,10 @@
       return 0;
   #endif
   }
+#else
+  static int os_supports_avx(void) { return 0; }
+  static int cpu_supports_avx2(void) { return 0; }
+  static int cpu_supports_sse42(void) { return 0; }
 #endif
 
 static PyObject *kernel_available(PyObject *self, PyObject *args)

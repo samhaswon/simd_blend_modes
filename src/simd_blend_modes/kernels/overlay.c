@@ -8,6 +8,7 @@ static inline float overlay_comp(float in_c, float layer_c)
     return 1.0f - (2.0f * (1.0f - in_c) * (1.0f - layer_c));
 }
 
+#if SIMD_BLEND_MODES_X86
 static inline __m128 overlay_comp_ps128(__m128 in_c, __m128 layer_c)
 {
     __m128 half = _mm_set1_ps(0.5f);
@@ -31,8 +32,14 @@ static inline __m256 overlay_comp_ps256(__m256 in_c, __m256 layer_c)
                                               _mm256_set1_ps(2.0f)));
     return _mm256_blendv_ps(high, low, mask);
 }
+#endif
 
 PyObject *blend_overlay(PyObject *self, PyObject *args)
 {
-    return blend_ratio_mode_simd(args, overlay_comp, overlay_comp_ps128, overlay_comp_ps256, 0);
+    return blend_ratio_mode_simd(
+        args,
+        overlay_comp,
+        SIMD_BLEND_MODES_SIMD_ARGS(overlay_comp_ps128, overlay_comp_ps256),
+        0
+    );
 }

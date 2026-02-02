@@ -6,77 +6,91 @@
 #include <stdint.h>
 #include <string.h>
 
-#include <smmintrin.h>
-#include <tmmintrin.h>
-#include <immintrin.h>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+  #define SIMD_BLEND_MODES_X86 1
+#else
+  #define SIMD_BLEND_MODES_X86 0
+#endif
+
+#if SIMD_BLEND_MODES_X86
+  #include <smmintrin.h>
+  #include <tmmintrin.h>
+  #include <immintrin.h>
+#endif
 
 #define NO_IMPORT_ARRAY
 #define PY_ARRAY_UNIQUE_SYMBOL SIMD_BLEND_MODES_ARRAY_API
 #include <numpy/arrayobject.h>
 
 /* ----- Runtime CPU feature detection (GCC/Clang + MSVC) ----- */
-#if defined(_MSC_VER)
-  #include <intrin.h>
-  static int os_supports_avx(void) {
-      /* Check OSXSAVE + XCR0[2:1] == 11b so OS saves YMM state */
-      int cpuInfo[4];
-      __cpuid(cpuInfo, 1);
-      int ecx = cpuInfo[2];
-      int osxsave = (ecx >> 27) & 1;
-      if (!osxsave) return 0;
-      unsigned long long xcr0 = _xgetbv(0);
-      return ((xcr0 & 0x6) == 0x6); /* XMM (bit1) and YMM (bit2) state enabled */
-  }
+#if SIMD_BLEND_MODES_X86
+  #if defined(_MSC_VER)
+    #include <intrin.h>
+    static int os_supports_avx(void) {
+        /* Check OSXSAVE + XCR0[2:1] == 11b so OS saves YMM state */
+        int cpuInfo[4];
+        __cpuid(cpuInfo, 1);
+        int ecx = cpuInfo[2];
+        int osxsave = (ecx >> 27) & 1;
+        if (!osxsave) return 0;
+        unsigned long long xcr0 = _xgetbv(0);
+        return ((xcr0 & 0x6) == 0x6); /* XMM (bit1) and YMM (bit2) state enabled */
+    }
 
-  static int cpu_supports_avx2(void) {
-      int cpuInfo[4];
-      __cpuid(cpuInfo, 1);
-      int ecx = cpuInfo[2];
-      int avx   = (ecx >> 28) & 1;
-      int osxsave = (ecx >> 27) & 1;
-      if (!(avx && osxsave && os_supports_avx())) return 0;
+    static int cpu_supports_avx2(void) {
+        int cpuInfo[4];
+        __cpuid(cpuInfo, 1);
+        int ecx = cpuInfo[2];
+        int avx   = (ecx >> 28) & 1;
+        int osxsave = (ecx >> 27) & 1;
+        if (!(avx && osxsave && os_supports_avx())) return 0;
 
-      /* Leaf 7, subleaf 0: EBX bit 5 = AVX2 */
-      int ex[4];
-      __cpuidex(ex, 7, 0);
-      int ebx = ex[1];
-      return (ebx >> 5) & 1;
-  }
+        /* Leaf 7, subleaf 0: EBX bit 5 = AVX2 */
+        int ex[4];
+        __cpuidex(ex, 7, 0);
+        int ebx = ex[1];
+        return (ebx >> 5) & 1;
+    }
 
-  static int cpu_supports_sse42(void) {
-      int cpuInfo[4];
-      __cpuid(cpuInfo, 1);
-      int ecx = cpuInfo[2];
-      return (ecx >> 20) & 1; /* SSE4.2 */
-  }
+    static int cpu_supports_sse42(void) {
+        int cpuInfo[4];
+        __cpuid(cpuInfo, 1);
+        int ecx = cpuInfo[2];
+        return (ecx >> 20) & 1; /* SSE4.2 */
+    }
+  #else
+    /* GCC/Clang path */
+    static int os_supports_avx(void) {
+    #if defined(__GNUC__) || defined(__clang__)
+        /* If we’re here, assume OS supports AVX when the CPU supports it.
+           For full rigor you can also call xgetbv via inline asm, but it’s uncommon to lack it. */
+        return 1;
+    #else
+        return 0;
+    #endif
+    }
+
+    static int cpu_supports_avx2(void) {
+    #if defined(__GNUC__) || defined(__clang__)
+        /* Requires -mavx2 at compile, but we only *call* the AVX2 kernel if true. */
+        return __builtin_cpu_supports("avx2");
+    #else
+        return 0;
+    #endif
+    }
+
+    static int cpu_supports_sse42(void) {
+    #if defined(__GNUC__) || defined(__clang__)
+        return __builtin_cpu_supports("sse4.2");
+    #else
+        return 0;
+    #endif
+    }
+  #endif
 #else
-  /* GCC/Clang path */
-  static int os_supports_avx(void) {
-  #if defined(__GNUC__) || defined(__clang__)
-      /* If we’re here, assume OS supports AVX when the CPU supports it.
-         For full rigor you can also call xgetbv via inline asm, but it’s uncommon to lack it. */
-      return 1;
-  #else
-      return 0;
-  #endif
-  }
-
-  static int cpu_supports_avx2(void) {
-  #if defined(__GNUC__) || defined(__clang__)
-      /* Requires -mavx2 at compile, but we only *call* the AVX2 kernel if true. */
-      return __builtin_cpu_supports("avx2");
-  #else
-      return 0;
-  #endif
-  }
-
-  static int cpu_supports_sse42(void) {
-  #if defined(__GNUC__) || defined(__clang__)
-      return __builtin_cpu_supports("sse4.2");
-  #else
-      return 0;
-  #endif
-  }
+  static int os_supports_avx(void) { return 0; }
+  static int cpu_supports_avx2(void) { return 0; }
+  static int cpu_supports_sse42(void) { return 0; }
 #endif
 
 typedef enum {
@@ -89,6 +103,10 @@ typedef enum {
 /* ---------- Kernel dispatch ---------- */
 
 static kernel_kind pick_kernel(const char *force_name) {
+#if !SIMD_BLEND_MODES_X86
+    (void)force_name;
+    return KERNEL_SCALAR;
+#endif
     if (force_name) {
         if (strcmp(force_name, "scalar") == 0) return KERNEL_SCALAR;
         if (strcmp(force_name, "sse42")  == 0) return KERNEL_SSE42;
@@ -119,10 +137,21 @@ typedef struct {
 
 typedef float (*blend_comp_fn)(float in_c, float layer_c);
 
+#if SIMD_BLEND_MODES_X86
 typedef __m128 (*blend_comp_fn128)(__m128 in_c, __m128 layer_c);
-
 typedef __m256 (*blend_comp_fn256)(__m256 in_c, __m256 layer_c);
+#else
+typedef void *blend_comp_fn128;
+typedef void *blend_comp_fn256;
+#endif
 
+#if SIMD_BLEND_MODES_X86
+#define SIMD_BLEND_MODES_SIMD_ARGS(comp_sse, comp_avx) (comp_sse), (comp_avx)
+#else
+#define SIMD_BLEND_MODES_SIMD_ARGS(comp_sse, comp_avx) NULL, NULL
+#endif
+
+#if SIMD_BLEND_MODES_X86
 static inline __m256 mul_add_ps256(__m256 a, __m256 b, __m256 c) {
 #ifdef __FMA__
     return _mm256_fmadd_ps(a, b, c);
@@ -397,6 +426,7 @@ static inline __m128 mul_add_ps128(__m128 a, __m128 b, __m128 c) {
     return _mm_add_ps(_mm_mul_ps(a, b), c);
 #endif
 }
+#endif
 
 static inline float clamp01(float value) {
     if (value < 0.0f) {
@@ -429,6 +459,7 @@ static inline void write_channel(BlendOutput *output, npy_intp index, float valu
     output->f32[index] = scaled;
 }
 
+#if SIMD_BLEND_MODES_X86
 static inline void load_rgb4(const BlendArray *array, npy_intp index,
                              __m128 *r, __m128 *g, __m128 *b) {
     npy_intp base0 = (index + 0) * array->channels;
@@ -554,6 +585,7 @@ static inline void store_alpha8(BlendOutput *output, npy_intp index, __m256 a) {
         write_channel(output, base, av[i]);
     }
 }
+#endif
 
 static inline void release_blend_inputs(BlendArray *background, BlendArray *foreground) {
     Py_DECREF(background->array);
@@ -745,6 +777,7 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
 
     npy_intp pixels = height * width;
     npy_intp index = 0;
+#if SIMD_BLEND_MODES_X86
     const __m128 one = _mm_set1_ps(1.0f);
     const __m256 one256 = _mm256_set1_ps(1.0f);
     const __m128 opacity128 = _mm_set1_ps(opacity);
@@ -754,7 +787,23 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
 
 #if defined(__AVX2__)
     if (kernel == KERNEL_AVX2) {
+        const npy_intp prefetch_distance = 16;
         for (; index + 7 < pixels; index += 8) {
+            npy_intp prefetch_index = index + prefetch_distance;
+            if (background.is_uint8) {
+                _mm_prefetch((const char *)(background.u8 + (prefetch_index * background.channels)),
+                             _MM_HINT_T0);
+            } else {
+                _mm_prefetch((const char *)(background.f32 + (prefetch_index * background.channels)),
+                             _MM_HINT_T0);
+            }
+            if (foreground.is_uint8) {
+                _mm_prefetch((const char *)(foreground.u8 + (prefetch_index * foreground.channels)),
+                             _MM_HINT_T0);
+            } else {
+                _mm_prefetch((const char *)(foreground.f32 + (prefetch_index * foreground.channels)),
+                             _MM_HINT_T0);
+            }
             __m256 in_r, in_g, in_b, in_a;
             __m256 layer_r, layer_g, layer_b, layer_a;
             if (background.is_uint8 && background.channels == 4) {
@@ -883,6 +932,7 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
         }
     }
 #endif
+#endif
 
     for (; index < pixels; ++index) {
         npy_intp bg_offset = index * background.channels;
@@ -960,6 +1010,7 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
 
     npy_intp pixels = height * width;
     npy_intp index = 0;
+#if SIMD_BLEND_MODES_X86
     const __m128 one = _mm_set1_ps(1.0f);
     const __m256 one256 = _mm256_set1_ps(1.0f);
     const __m128 opacity128 = _mm_set1_ps(opacity);
@@ -969,7 +1020,23 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
 
 #if defined(__AVX2__)
     if (kernel == KERNEL_AVX2) {
+        const npy_intp prefetch_distance = 16;
         for (; index + 7 < pixels; index += 8) {
+            npy_intp prefetch_index = index + prefetch_distance;
+            if (background.is_uint8) {
+                _mm_prefetch((const char *)(background.u8 + (prefetch_index * background.channels)),
+                             _MM_HINT_T0);
+            } else {
+                _mm_prefetch((const char *)(background.f32 + (prefetch_index * background.channels)),
+                             _MM_HINT_T0);
+            }
+            if (foreground.is_uint8) {
+                _mm_prefetch((const char *)(foreground.u8 + (prefetch_index * foreground.channels)),
+                             _MM_HINT_T0);
+            } else {
+                _mm_prefetch((const char *)(foreground.f32 + (prefetch_index * foreground.channels)),
+                             _MM_HINT_T0);
+            }
             __m256 in_r, in_g, in_b, in_a;
             __m256 layer_r, layer_g, layer_b, layer_a;
             if (background.is_uint8 && background.channels == 4) {
@@ -1095,6 +1162,7 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
             }
         }
     }
+#endif
 #endif
 
     for (; index < pixels; ++index) {

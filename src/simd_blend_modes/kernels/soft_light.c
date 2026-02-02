@@ -7,6 +7,7 @@ static inline float soft_light_comp(float in_c, float layer_c)
     return term1 + term2;
 }
 
+#if SIMD_BLEND_MODES_X86
 static inline __m128 soft_light_comp_ps128(__m128 in_c, __m128 layer_c)
 {
     __m128 one = _mm_set1_ps(1.0f);
@@ -28,9 +29,14 @@ static inline __m256 soft_light_comp_ps256(__m256 in_c, __m256 layer_c)
                                                              _mm256_sub_ps(one, layer_c))));
     return _mm256_add_ps(term1, term2);
 }
+#endif
 
 PyObject *blend_soft_light(PyObject *self, PyObject *args)
 {
-    return blend_ratio_mode_simd(args, soft_light_comp, soft_light_comp_ps128,
-                                 soft_light_comp_ps256, 0);
+    return blend_ratio_mode_simd(
+        args,
+        soft_light_comp,
+        SIMD_BLEND_MODES_SIMD_ARGS(soft_light_comp_ps128, soft_light_comp_ps256),
+        0
+    );
 }
