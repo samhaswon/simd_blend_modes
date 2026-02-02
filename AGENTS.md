@@ -7,6 +7,8 @@
 - Use the default Python `unittest` module for tests in this project.
 
   - Tests are run with `python3 -m unittest discover tests/`.
+  - If an ARM Docker build fails with `exec /bin/sh: exec format error`, enable QEMU/binfmt
+    emulation first: `docker run --privileged --rm tonistiigi/binfmt --install arm64`.
 
 ## Project Notes
 
@@ -25,6 +27,8 @@
   alpha channels are treated as 255 (opaque), and opacity defaults to 1.0 when omitted.
 - Tests in `tests/test_blend_modes.py` now include full exhaustive uint8 and float32 RGBA sweeps
   (chunked for memory) plus parity checks against the reference implementation.
+- ARM builds are scalar-only; SIMD intrinsics are x86-only and gated at compile time. CI does not
+  emit ARM artifacts.
 
 
 ## Code Style

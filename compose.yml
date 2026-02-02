@@ -1,0 +1,7 @@
+services:
+  arm-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    command: python3 -m unittest discover tests/
