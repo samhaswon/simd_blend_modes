@@ -119,6 +119,11 @@ class TestBlendModes(unittest.TestCase):
         ]
         channel_pairs = [(3, 3), (3, 4), (4, 3), (4, 4)]
 
+        kernels = ["auto", "scalar", "sse42", "avx2"]
+        available_kernels = [
+            kernel for kernel in kernels
+            if simd_blend_modes._simd_blend_modes.kernel_available(kernel)
+        ]
         for mode_name in BLEND_MODE_NAMES:
             func = getattr(simd_blend_modes, mode_name)
             for background_dtype, foreground_dtype in dtype_pairs:
@@ -144,20 +149,27 @@ class TestBlendModes(unittest.TestCase):
                                 opacity,
                                 background_channels,
                             )
-                        actual = func(background, foreground, float(opacity))
-                        context = (
-                            f"{mode_name} bg={background_dtype.__name__} "
-                            f"fg={foreground_dtype.__name__} "
-                            f"bg_ch={background_channels} "
-                            f"fg_ch={foreground_channels} "
-                            f"opacity={opacity}"
-                        )
-                        self._assert_close(actual, expected, context=context)
+                        for kernel in available_kernels:
+                            actual = func(background, foreground, float(opacity), kernel)
+                            context = (
+                                f"{mode_name} bg={background_dtype.__name__} "
+                                f"fg={foreground_dtype.__name__} "
+                                f"bg_ch={background_channels} "
+                                f"fg_ch={foreground_channels} "
+                                f"opacity={opacity} kernel={kernel}"
+                            )
+                            self._assert_close(actual, expected, context=context)
 
     def test_exhaustive_uint8_values(self) -> None:
         total_values = 256 * 256 * 256
         chunk_size = 65536
         opacity = 0.5
+
+        kernels = ["auto", "scalar", "sse42", "avx2"]
+        available_kernels = [
+            kernel for kernel in kernels
+            if simd_blend_modes._simd_blend_modes.kernel_available(kernel)
+        ]
 
         for mode_name in BLEND_MODE_NAMES:
             func = getattr(simd_blend_modes, mode_name)
@@ -179,17 +191,24 @@ class TestBlendModes(unittest.TestCase):
                     opacity,
                     4,
                 )
-                actual = func(background, foreground, float(opacity))
-                context = (
-                    f"{mode_name} uint8 exhaustive bg_ch=4 fg_ch=4 opacity={opacity} "
-                    f"range={start}-{end - 1}"
-                )
-                self._assert_close(actual, expected, context=context)
+                for kernel in available_kernels:
+                    actual = func(background, foreground, float(opacity), kernel)
+                    context = (
+                        f"{mode_name} uint8 exhaustive bg_ch=4 fg_ch=4 opacity={opacity} "
+                        f"kernel={kernel} range={start}-{end - 1}"
+                    )
+                    self._assert_close(actual, expected, context=context)
 
     def test_exhaustive_float32_values(self) -> None:
         total_values = 256 * 256 * 256
         chunk_size = 65536
         opacity = 0.5
+
+        kernels = ["auto", "scalar", "sse42", "avx2"]
+        available_kernels = [
+            kernel for kernel in kernels
+            if simd_blend_modes._simd_blend_modes.kernel_available(kernel)
+        ]
 
         for mode_name in BLEND_MODE_NAMES:
             func = getattr(simd_blend_modes, mode_name)
@@ -211,12 +230,13 @@ class TestBlendModes(unittest.TestCase):
                     opacity,
                     4,
                 )
-                actual = func(background, foreground, float(opacity))
-                context = (
-                    f"{mode_name} float32 exhaustive bg_ch=4 fg_ch=4 opacity={opacity} "
-                    f"range={start}-{end - 1}"
-                )
-                self._assert_close(actual, expected, context=context)
+                for kernel in available_kernels:
+                    actual = func(background, foreground, float(opacity), kernel)
+                    context = (
+                        f"{mode_name} float32 exhaustive bg_ch=4 fg_ch=4 opacity={opacity} "
+                        f"kernel={kernel} range={start}-{end - 1}"
+                    )
+                    self._assert_close(actual, expected, context=context)
 
     def test_opacity_default(self) -> None:
         background = self._make_image(3, np.uint8, self.background_values)
