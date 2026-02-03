@@ -426,6 +426,14 @@ static inline __m128 mul_add_ps128(__m128 a, __m128 b, __m128 c) {
     return _mm_add_ps(_mm_mul_ps(a, b), c);
 #endif
 }
+
+static inline __m128 fnmadd_ps128(__m128 a, __m128 b, __m128 c) {
+#ifdef __FMA__
+    return _mm_fnmadd_ps(a, b, c);
+#else
+    return _mm_sub_ps(c, _mm_mul_ps(a, b));
+#endif
+}
 #endif
 
 static inline float clamp01(float value) {
