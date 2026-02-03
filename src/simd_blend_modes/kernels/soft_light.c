@@ -35,6 +35,7 @@ PyObject *blend_soft_light(PyObject *self, PyObject *args)
         args,
         soft_light_comp,
         SIMD_BLEND_MODES_SIMD_ARGS(soft_light_comp_ps128, soft_light_comp_ps256),
+        SIMD_BLEND_MODES_SIMD_U8_ARGS(NULL, NULL),
         0
     );
 }

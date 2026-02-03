@@ -32,6 +32,7 @@ PyObject *blend_divide(PyObject *self, PyObject *args)
         args,
         divide_comp,
         SIMD_BLEND_MODES_SIMD_ARGS(divide_comp_ps128, divide_comp_ps256),
+        SIMD_BLEND_MODES_SIMD_U8_ARGS(NULL, NULL),
         0
     );
 }

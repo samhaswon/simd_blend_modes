@@ -25,6 +25,7 @@ PyObject *blend_grain_extract(PyObject *self, PyObject *args)
         args,
         grain_extract_comp,
         SIMD_BLEND_MODES_SIMD_ARGS(grain_extract_comp_ps128, grain_extract_comp_ps256),
+        SIMD_BLEND_MODES_SIMD_U8_ARGS(NULL, NULL),
         0
     );
 }

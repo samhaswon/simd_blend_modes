@@ -27,6 +27,7 @@ PyObject *blend_screen(PyObject *self, PyObject *args)
         args,
         screen_comp,
         SIMD_BLEND_MODES_SIMD_ARGS(screen_comp_ps128, screen_comp_ps256),
+        SIMD_BLEND_MODES_SIMD_U8_ARGS(NULL, NULL),
         0
     );
 }

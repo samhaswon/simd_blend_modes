@@ -55,6 +55,7 @@ PyObject *blend_hard_light(PyObject *self, PyObject *args)
         args,
         hard_light_comp,
         SIMD_BLEND_MODES_SIMD_ARGS(hard_light_comp_ps128, hard_light_comp_ps256),
+        SIMD_BLEND_MODES_SIMD_U8_ARGS(NULL, NULL),
         0
     );
 }

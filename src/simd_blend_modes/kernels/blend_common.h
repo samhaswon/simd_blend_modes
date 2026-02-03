@@ -140,15 +140,21 @@ typedef float (*blend_comp_fn)(float in_c, float layer_c);
 #if SIMD_BLEND_MODES_X86
 typedef __m128 (*blend_comp_fn128)(__m128 in_c, __m128 layer_c);
 typedef __m256 (*blend_comp_fn256)(__m256 in_c, __m256 layer_c);
+typedef __m128 (*blend_comp_fn128_u8)(__m128i in_c, __m128i layer_c, __m128 inv255);
+typedef __m256 (*blend_comp_fn256_u8)(__m256i in_c, __m256i layer_c, __m256 inv255);
 #else
 typedef void *blend_comp_fn128;
 typedef void *blend_comp_fn256;
+typedef void *blend_comp_fn128_u8;
+typedef void *blend_comp_fn256_u8;
 #endif
 
 #if SIMD_BLEND_MODES_X86
 #define SIMD_BLEND_MODES_SIMD_ARGS(comp_sse, comp_avx) (comp_sse), (comp_avx)
+#define SIMD_BLEND_MODES_SIMD_U8_ARGS(comp_sse, comp_avx) (comp_sse), (comp_avx)
 #else
 #define SIMD_BLEND_MODES_SIMD_ARGS(comp_sse, comp_avx) NULL, NULL
+#define SIMD_BLEND_MODES_SIMD_U8_ARGS(comp_sse, comp_avx) NULL, NULL
 #endif
 
 #if SIMD_BLEND_MODES_X86
@@ -168,11 +174,67 @@ static inline __m256 fnmadd_ps256(__m256 a, __m256 b, __m256 c) {
 #endif
 }
 
+static inline __m128 u32_to_unit_f32_sse(__m128i v, __m128 inv255) {
+    return _mm_mul_ps(_mm_cvtepi32_ps(v), inv255);
+}
+
+static inline __m256 u32_to_unit_f32_avx2(__m256i v, __m256 inv255) {
+    return _mm256_mul_ps(_mm256_cvtepi32_ps(v), inv255);
+}
+
 /* Convert 8 consecutive u8 to float32 in [0,1] (for grayscale im_alpha). */
 static inline __m256 load8_u8_to_unit_f32_avx2(const uint8_t *p, __m256 inv255) {
     __m128i v8  = _mm_loadl_epi64((const __m128i*)p);        /* 8 bytes -> XMM */
     __m256i v32 = _mm256_cvtepu8_epi32(v8);                  /* widen to 8 x u32 */
     return _mm256_mul_ps(_mm256_cvtepi32_ps(v32), inv255);
+}
+
+static inline void load_rgba8_u8_to_u32_avx2(const uint8_t *p,
+                                             __m256i *r, __m256i *g,
+                                             __m256i *b, __m256i *a) {
+    __m256i pixels = _mm256_loadu_si256((const __m256i *)p);
+    __m128i lo = _mm256_castsi256_si128(pixels);
+    __m128i hi = _mm256_extracti128_si256(pixels, 1);
+
+    const __m128i mask_r = _mm_setr_epi8(
+        0, 4, 8, 12, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80);
+    const __m128i mask_g = _mm_setr_epi8(
+        1, 5, 9, 13, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80);
+    const __m128i mask_b = _mm_setr_epi8(
+        2, 6, 10, 14, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80);
+    const __m128i mask_a = _mm_setr_epi8(
+        3, 7, 11, 15, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80);
+
+    __m128i r_lo = _mm_shuffle_epi8(lo, mask_r);
+    __m128i r_hi = _mm_shuffle_epi8(hi, mask_r);
+    __m128i g_lo = _mm_shuffle_epi8(lo, mask_g);
+    __m128i g_hi = _mm_shuffle_epi8(hi, mask_g);
+    __m128i b_lo = _mm_shuffle_epi8(lo, mask_b);
+    __m128i b_hi = _mm_shuffle_epi8(hi, mask_b);
+    __m128i a_lo = _mm_shuffle_epi8(lo, mask_a);
+    __m128i a_hi = _mm_shuffle_epi8(hi, mask_a);
+
+    __m128i r32_lo = _mm_cvtepu8_epi32(r_lo);
+    __m128i r32_hi = _mm_cvtepu8_epi32(r_hi);
+    __m128i g32_lo = _mm_cvtepu8_epi32(g_lo);
+    __m128i g32_hi = _mm_cvtepu8_epi32(g_hi);
+    __m128i b32_lo = _mm_cvtepu8_epi32(b_lo);
+    __m128i b32_hi = _mm_cvtepu8_epi32(b_hi);
+    __m128i a32_lo = _mm_cvtepu8_epi32(a_lo);
+    __m128i a32_hi = _mm_cvtepu8_epi32(a_hi);
+
+    *r = _mm256_inserti128_si256(_mm256_castsi128_si256(r32_lo), r32_hi, 1);
+    *g = _mm256_inserti128_si256(_mm256_castsi128_si256(g32_lo), g32_hi, 1);
+    *b = _mm256_inserti128_si256(_mm256_castsi128_si256(b32_lo), b32_hi, 1);
+    *a = _mm256_inserti128_si256(_mm256_castsi128_si256(a32_lo), a32_hi, 1);
 }
 
 static inline void load16_u8_to_unit_f32_avx2(const uint8_t *p, __m256 inv255,
@@ -514,6 +576,38 @@ static inline void load_rgba4_u8_to_unit_f32_sse(const uint8_t *p, __m128 inv255
     *a = _mm_mul_ps(_mm_cvtepi32_ps(_mm_cvtepu8_epi32(a8)), inv255);
 }
 
+static inline void load_rgba4_u8_to_u32_sse(const uint8_t *p,
+                                            __m128i *r, __m128i *g,
+                                            __m128i *b, __m128i *a) {
+    __m128i pixels = _mm_loadu_si128((const __m128i *)p);
+    const __m128i mask_r = _mm_setr_epi8(
+        0, 4, 8, 12, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80);
+    const __m128i mask_g = _mm_setr_epi8(
+        1, 5, 9, 13, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80);
+    const __m128i mask_b = _mm_setr_epi8(
+        2, 6, 10, 14, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80);
+    const __m128i mask_a = _mm_setr_epi8(
+        3, 7, 11, 15, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
+        (char)0x80, (char)0x80);
+
+    __m128i r8 = _mm_shuffle_epi8(pixels, mask_r);
+    __m128i g8 = _mm_shuffle_epi8(pixels, mask_g);
+    __m128i b8 = _mm_shuffle_epi8(pixels, mask_b);
+    __m128i a8 = _mm_shuffle_epi8(pixels, mask_a);
+
+    *r = _mm_cvtepu8_epi32(r8);
+    *g = _mm_cvtepu8_epi32(g8);
+    *b = _mm_cvtepu8_epi32(b8);
+    *a = _mm_cvtepu8_epi32(a8);
+}
+
 static inline __m128 nan_to_num_ps128(__m128 x) {
     __m128 cmp = _mm_cmpord_ps(x, x); /* 0 for NaN lanes */
     return _mm_blendv_ps(_mm_set1_ps(0.0f), x, cmp);
@@ -607,6 +701,31 @@ static inline void load_rgb4_u8(const uint8_t *data, int channels, npy_intp inde
     *r = _mm_set_ps(r3, r2, r1, r0);
     *g = _mm_set_ps(g3, g2, g1, g0);
     *b = _mm_set_ps(b3, b2, b1, b0);
+}
+
+static inline void load_rgb4_u8_to_u32_sse(const uint8_t *data, int channels, npy_intp index,
+                                           __m128i *r, __m128i *g, __m128i *b) {
+    npy_intp base0 = (index + 0) * channels;
+    npy_intp base1 = (index + 1) * channels;
+    npy_intp base2 = (index + 2) * channels;
+    npy_intp base3 = (index + 3) * channels;
+
+    uint32_t r0 = data[base0 + 0];
+    uint32_t g0 = data[base0 + 1];
+    uint32_t b0 = data[base0 + 2];
+    uint32_t r1 = data[base1 + 0];
+    uint32_t g1 = data[base1 + 1];
+    uint32_t b1 = data[base1 + 2];
+    uint32_t r2 = data[base2 + 0];
+    uint32_t g2 = data[base2 + 1];
+    uint32_t b2 = data[base2 + 2];
+    uint32_t r3 = data[base3 + 0];
+    uint32_t g3 = data[base3 + 1];
+    uint32_t b3 = data[base3 + 2];
+
+    *r = _mm_set_epi32((int)r3, (int)r2, (int)r1, (int)r0);
+    *g = _mm_set_epi32((int)g3, (int)g2, (int)g1, (int)g0);
+    *b = _mm_set_epi32((int)b3, (int)b2, (int)b1, (int)b0);
 }
 
 static inline void load_rgb4_f32(const float *data, int channels, npy_intp index,
@@ -763,6 +882,25 @@ static inline void load_rgb8_u8(const uint8_t *data, int channels, npy_intp inde
     *r = _mm256_set_ps(rv[7], rv[6], rv[5], rv[4], rv[3], rv[2], rv[1], rv[0]);
     *g = _mm256_set_ps(gv[7], gv[6], gv[5], gv[4], gv[3], gv[2], gv[1], gv[0]);
     *b = _mm256_set_ps(bv[7], bv[6], bv[5], bv[4], bv[3], bv[2], bv[1], bv[0]);
+}
+
+static inline void load_rgb8_u8_to_u32_avx2(const uint8_t *data, int channels, npy_intp index,
+                                            __m256i *r, __m256i *g, __m256i *b) {
+    uint32_t rv[8];
+    uint32_t gv[8];
+    uint32_t bv[8];
+    for (int i = 0; i < 8; ++i) {
+        npy_intp base = (index + i) * channels;
+        rv[i] = data[base + 0];
+        gv[i] = data[base + 1];
+        bv[i] = data[base + 2];
+    }
+    *r = _mm256_set_epi32((int)rv[7], (int)rv[6], (int)rv[5], (int)rv[4],
+                          (int)rv[3], (int)rv[2], (int)rv[1], (int)rv[0]);
+    *g = _mm256_set_epi32((int)gv[7], (int)gv[6], (int)gv[5], (int)gv[4],
+                          (int)gv[3], (int)gv[2], (int)gv[1], (int)gv[0]);
+    *b = _mm256_set_epi32((int)bv[7], (int)bv[6], (int)bv[5], (int)bv[4],
+                          (int)bv[3], (int)bv[2], (int)bv[1], (int)bv[0]);
 }
 
 static inline void load_rgb8_f32(const float *data, int channels, npy_intp index,
@@ -1003,6 +1141,8 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
                                        blend_comp_fn comp_scalar,
                                        blend_comp_fn128 comp_sse,
                                        blend_comp_fn256 comp_avx,
+                                       blend_comp_fn128_u8 comp_sse_u8,
+                                       blend_comp_fn256_u8 comp_avx_u8,
                                        int clip_output) {
     BlendArray background = {0};
     BlendArray foreground = {0};
@@ -1051,75 +1191,157 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
         const npy_intp prefetch_distance = 16;
         if (background.is_uint8) {
             if (foreground.is_uint8) {
-                for (; index + 7 < pixels; index += 8) {
-                    npy_intp prefetch_index = index + prefetch_distance;
-                    _mm_prefetch((const char *)(background.u8 + (prefetch_index * background.channels)),
-                                 _MM_HINT_T0);
-                    _mm_prefetch((const char *)(foreground.u8 + (prefetch_index * foreground.channels)),
-                                 _MM_HINT_T0);
+                if (comp_avx_u8) {
+                    for (; index + 7 < pixels; index += 8) {
+                        npy_intp prefetch_index = index + prefetch_distance;
+                        _mm_prefetch((const char *)(background.u8 + (prefetch_index * background.channels)),
+                                     _MM_HINT_T0);
+                        _mm_prefetch((const char *)(foreground.u8 + (prefetch_index * foreground.channels)),
+                                     _MM_HINT_T0);
 
-                    __m256 in_r, in_g, in_b, in_a;
-                    __m256 layer_r, layer_g, layer_b, layer_a;
-                    if (background.channels == 4) {
-                        load_rgba8_u8_to_unit_f32_avx2(
-                            background.u8 + (index * background.channels),
-                            inv255256,
-                            &in_r,
-                            &in_g,
-                            &in_b,
-                            &in_a
-                        );
-                    } else {
-                        load_rgb8_u8(background.u8, background.channels, index, &in_r, &in_g, &in_b);
-                        in_a = _mm256_set1_ps(1.0f);
+                        __m256i in_r_u, in_g_u, in_b_u, in_a_u;
+                        __m256i layer_r_u, layer_g_u, layer_b_u, layer_a_u;
+                        __m256 in_r, in_g, in_b, in_a;
+                        __m256 layer_a;
+
+                        if (background.channels == 4) {
+                            load_rgba8_u8_to_u32_avx2(
+                                background.u8 + (index * background.channels),
+                                &in_r_u,
+                                &in_g_u,
+                                &in_b_u,
+                                &in_a_u
+                            );
+                            in_a = u32_to_unit_f32_avx2(in_a_u, inv255256);
+                        } else {
+                            load_rgb8_u8_to_u32_avx2(background.u8, background.channels, index,
+                                                     &in_r_u, &in_g_u, &in_b_u);
+                            in_a = _mm256_set1_ps(1.0f);
+                        }
+                        in_r = u32_to_unit_f32_avx2(in_r_u, inv255256);
+                        in_g = u32_to_unit_f32_avx2(in_g_u, inv255256);
+                        in_b = u32_to_unit_f32_avx2(in_b_u, inv255256);
+
+                        if (foreground.channels == 4) {
+                            load_rgba8_u8_to_u32_avx2(
+                                foreground.u8 + (index * foreground.channels),
+                                &layer_r_u,
+                                &layer_g_u,
+                                &layer_b_u,
+                                &layer_a_u
+                            );
+                            layer_a = u32_to_unit_f32_avx2(layer_a_u, inv255256);
+                        } else {
+                            load_rgb8_u8_to_u32_avx2(foreground.u8, foreground.channels, index,
+                                                     &layer_r_u, &layer_g_u, &layer_b_u);
+                            layer_a = _mm256_set1_ps(1.0f);
+                        }
+
+                        __m256 comp_alpha = _mm256_mul_ps(_mm256_min_ps(in_a, layer_a), opacity256);
+                        __m256 new_alpha = mul_add_ps256(_mm256_sub_ps(one256, in_a), comp_alpha, in_a);
+                        __m256 ratio = _mm256_div_ps(comp_alpha, new_alpha);
+                        __m256 mask = _mm256_cmp_ps(new_alpha, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
+                        ratio = _mm256_blendv_ps(_mm256_set1_ps(0.0f), ratio, mask);
+
+                        __m256 comp_r = comp_avx_u8(in_r_u, layer_r_u, inv255256);
+                        __m256 comp_g = comp_avx_u8(in_g_u, layer_g_u, inv255256);
+                        __m256 comp_b = comp_avx_u8(in_b_u, layer_b_u, inv255256);
+
+                        __m256 out_r = mul_add_ps256(comp_r, ratio,
+                                                     _mm256_mul_ps(in_r, _mm256_sub_ps(one256, ratio)));
+                        __m256 out_g = mul_add_ps256(comp_g, ratio,
+                                                     _mm256_mul_ps(in_g, _mm256_sub_ps(one256, ratio)));
+                        __m256 out_b = mul_add_ps256(comp_b, ratio,
+                                                     _mm256_mul_ps(in_b, _mm256_sub_ps(one256, ratio)));
+
+                        if (clip_output) {
+                            out_r = _mm256_min_ps(_mm256_max_ps(out_r, _mm256_set1_ps(0.0f)),
+                                                  _mm256_set1_ps(1.0f));
+                            out_g = _mm256_min_ps(_mm256_max_ps(out_g, _mm256_set1_ps(0.0f)),
+                                                  _mm256_set1_ps(1.0f));
+                            out_b = _mm256_min_ps(_mm256_max_ps(out_b, _mm256_set1_ps(0.0f)),
+                                                  _mm256_set1_ps(1.0f));
+                        }
+
+                        if (output.channels == 4) {
+                            store_rgba8_u8(&output, index, out_r, out_g, out_b, in_a);
+                        } else {
+                            store_rgb8(&output, index, out_r, out_g, out_b);
+                            store_alpha8(&output, index, in_a);
+                        }
                     }
+                } else {
+                    for (; index + 7 < pixels; index += 8) {
+                        npy_intp prefetch_index = index + prefetch_distance;
+                        _mm_prefetch((const char *)(background.u8 + (prefetch_index * background.channels)),
+                                     _MM_HINT_T0);
+                        _mm_prefetch((const char *)(foreground.u8 + (prefetch_index * foreground.channels)),
+                                     _MM_HINT_T0);
 
-                    if (foreground.channels == 4) {
-                        load_rgba8_u8_to_unit_f32_avx2(
-                            foreground.u8 + (index * foreground.channels),
-                            inv255256,
-                            &layer_r,
-                            &layer_g,
-                            &layer_b,
-                            &layer_a
-                        );
-                    } else {
-                        load_rgb8_u8(foreground.u8, foreground.channels, index,
-                                     &layer_r, &layer_g, &layer_b);
-                        layer_a = _mm256_set1_ps(1.0f);
-                    }
+                        __m256 in_r, in_g, in_b, in_a;
+                        __m256 layer_r, layer_g, layer_b, layer_a;
+                        if (background.channels == 4) {
+                            load_rgba8_u8_to_unit_f32_avx2(
+                                background.u8 + (index * background.channels),
+                                inv255256,
+                                &in_r,
+                                &in_g,
+                                &in_b,
+                                &in_a
+                            );
+                        } else {
+                            load_rgb8_u8(background.u8, background.channels, index,
+                                         &in_r, &in_g, &in_b);
+                            in_a = _mm256_set1_ps(1.0f);
+                        }
 
-                    __m256 comp_alpha = _mm256_mul_ps(_mm256_min_ps(in_a, layer_a), opacity256);
-                    __m256 new_alpha = mul_add_ps256(_mm256_sub_ps(one256, in_a), comp_alpha, in_a);
-                    __m256 ratio = _mm256_div_ps(comp_alpha, new_alpha);
-                    __m256 mask = _mm256_cmp_ps(new_alpha, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
-                    ratio = _mm256_blendv_ps(_mm256_set1_ps(0.0f), ratio, mask);
+                        if (foreground.channels == 4) {
+                            load_rgba8_u8_to_unit_f32_avx2(
+                                foreground.u8 + (index * foreground.channels),
+                                inv255256,
+                                &layer_r,
+                                &layer_g,
+                                &layer_b,
+                                &layer_a
+                            );
+                        } else {
+                            load_rgb8_u8(foreground.u8, foreground.channels, index,
+                                         &layer_r, &layer_g, &layer_b);
+                            layer_a = _mm256_set1_ps(1.0f);
+                        }
 
-                    __m256 comp_r = comp_avx(in_r, layer_r);
-                    __m256 comp_g = comp_avx(in_g, layer_g);
-                    __m256 comp_b = comp_avx(in_b, layer_b);
+                        __m256 comp_alpha = _mm256_mul_ps(_mm256_min_ps(in_a, layer_a), opacity256);
+                        __m256 new_alpha = mul_add_ps256(_mm256_sub_ps(one256, in_a), comp_alpha, in_a);
+                        __m256 ratio = _mm256_div_ps(comp_alpha, new_alpha);
+                        __m256 mask = _mm256_cmp_ps(new_alpha, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
+                        ratio = _mm256_blendv_ps(_mm256_set1_ps(0.0f), ratio, mask);
 
-                    __m256 out_r = mul_add_ps256(comp_r, ratio,
-                                                 _mm256_mul_ps(in_r, _mm256_sub_ps(one256, ratio)));
-                    __m256 out_g = mul_add_ps256(comp_g, ratio,
-                                                 _mm256_mul_ps(in_g, _mm256_sub_ps(one256, ratio)));
-                    __m256 out_b = mul_add_ps256(comp_b, ratio,
-                                                 _mm256_mul_ps(in_b, _mm256_sub_ps(one256, ratio)));
+                        __m256 comp_r = comp_avx(in_r, layer_r);
+                        __m256 comp_g = comp_avx(in_g, layer_g);
+                        __m256 comp_b = comp_avx(in_b, layer_b);
 
-                    if (clip_output) {
-                        out_r = _mm256_min_ps(_mm256_max_ps(out_r, _mm256_set1_ps(0.0f)),
-                                              _mm256_set1_ps(1.0f));
-                        out_g = _mm256_min_ps(_mm256_max_ps(out_g, _mm256_set1_ps(0.0f)),
-                                              _mm256_set1_ps(1.0f));
-                        out_b = _mm256_min_ps(_mm256_max_ps(out_b, _mm256_set1_ps(0.0f)),
-                                              _mm256_set1_ps(1.0f));
-                    }
+                        __m256 out_r = mul_add_ps256(comp_r, ratio,
+                                                     _mm256_mul_ps(in_r, _mm256_sub_ps(one256, ratio)));
+                        __m256 out_g = mul_add_ps256(comp_g, ratio,
+                                                     _mm256_mul_ps(in_g, _mm256_sub_ps(one256, ratio)));
+                        __m256 out_b = mul_add_ps256(comp_b, ratio,
+                                                     _mm256_mul_ps(in_b, _mm256_sub_ps(one256, ratio)));
 
-                    if (output.channels == 4) {
-                        store_rgba8_u8(&output, index, out_r, out_g, out_b, in_a);
-                    } else {
-                        store_rgb8(&output, index, out_r, out_g, out_b);
-                        store_alpha8(&output, index, in_a);
+                        if (clip_output) {
+                            out_r = _mm256_min_ps(_mm256_max_ps(out_r, _mm256_set1_ps(0.0f)),
+                                                  _mm256_set1_ps(1.0f));
+                            out_g = _mm256_min_ps(_mm256_max_ps(out_g, _mm256_set1_ps(0.0f)),
+                                                  _mm256_set1_ps(1.0f));
+                            out_b = _mm256_min_ps(_mm256_max_ps(out_b, _mm256_set1_ps(0.0f)),
+                                                  _mm256_set1_ps(1.0f));
+                        }
+
+                        if (output.channels == 4) {
+                            store_rgba8_u8(&output, index, out_r, out_g, out_b, in_a);
+                        } else {
+                            store_rgb8(&output, index, out_r, out_g, out_b);
+                            store_alpha8(&output, index, in_a);
+                        }
                     }
                 }
             } else {
@@ -1383,70 +1605,145 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
     if (kernel == KERNEL_SSE42 || kernel == KERNEL_AVX2) {
         if (background.is_uint8) {
             if (foreground.is_uint8) {
-                for (; index + 3 < pixels; index += 4) {
-                    __m128 in_r, in_g, in_b, in_a;
-                    __m128 layer_r, layer_g, layer_b, layer_a;
-                    if (background.channels == 4) {
-                        load_rgba4_u8_to_unit_f32_sse(
-                            background.u8 + (index * background.channels),
-                            inv255128,
-                            &in_r,
-                            &in_g,
-                            &in_b,
-                            &in_a
-                        );
-                    } else {
-                        load_rgb4_u8(background.u8, background.channels, index,
-                                     &in_r, &in_g, &in_b);
-                        in_a = _mm_set1_ps(1.0f);
+                if (comp_sse_u8) {
+                    for (; index + 3 < pixels; index += 4) {
+                        __m128i in_r_u, in_g_u, in_b_u, in_a_u;
+                        __m128i layer_r_u, layer_g_u, layer_b_u, layer_a_u;
+                        __m128 in_r, in_g, in_b, in_a;
+                        __m128 layer_a;
+
+                        if (background.channels == 4) {
+                            load_rgba4_u8_to_u32_sse(
+                                background.u8 + (index * background.channels),
+                                &in_r_u,
+                                &in_g_u,
+                                &in_b_u,
+                                &in_a_u
+                            );
+                            in_a = u32_to_unit_f32_sse(in_a_u, inv255128);
+                        } else {
+                            load_rgb4_u8_to_u32_sse(background.u8, background.channels, index,
+                                                    &in_r_u, &in_g_u, &in_b_u);
+                            in_a = _mm_set1_ps(1.0f);
+                        }
+                        in_r = u32_to_unit_f32_sse(in_r_u, inv255128);
+                        in_g = u32_to_unit_f32_sse(in_g_u, inv255128);
+                        in_b = u32_to_unit_f32_sse(in_b_u, inv255128);
+
+                        if (foreground.channels == 4) {
+                            load_rgba4_u8_to_u32_sse(
+                                foreground.u8 + (index * foreground.channels),
+                                &layer_r_u,
+                                &layer_g_u,
+                                &layer_b_u,
+                                &layer_a_u
+                            );
+                            layer_a = u32_to_unit_f32_sse(layer_a_u, inv255128);
+                        } else {
+                            load_rgb4_u8_to_u32_sse(foreground.u8, foreground.channels, index,
+                                                    &layer_r_u, &layer_g_u, &layer_b_u);
+                            layer_a = _mm_set1_ps(1.0f);
+                        }
+
+                        __m128 comp_alpha = _mm_mul_ps(_mm_min_ps(in_a, layer_a), opacity128);
+                        __m128 new_alpha = mul_add_ps128(_mm_sub_ps(one, in_a), comp_alpha, in_a);
+                        __m128 ratio = _mm_div_ps(comp_alpha, new_alpha);
+                        __m128 mask = _mm_cmpgt_ps(new_alpha, _mm_set1_ps(0.0f));
+                        ratio = _mm_blendv_ps(_mm_set1_ps(0.0f), ratio, mask);
+
+                        __m128 comp_r = comp_sse_u8(in_r_u, layer_r_u, inv255128);
+                        __m128 comp_g = comp_sse_u8(in_g_u, layer_g_u, inv255128);
+                        __m128 comp_b = comp_sse_u8(in_b_u, layer_b_u, inv255128);
+
+                        __m128 out_r = mul_add_ps128(comp_r, ratio,
+                                                     _mm_mul_ps(in_r, _mm_sub_ps(one, ratio)));
+                        __m128 out_g = mul_add_ps128(comp_g, ratio,
+                                                     _mm_mul_ps(in_g, _mm_sub_ps(one, ratio)));
+                        __m128 out_b = mul_add_ps128(comp_b, ratio,
+                                                     _mm_mul_ps(in_b, _mm_sub_ps(one, ratio)));
+
+                        if (clip_output) {
+                            out_r = _mm_min_ps(_mm_max_ps(out_r, _mm_set1_ps(0.0f)),
+                                               _mm_set1_ps(1.0f));
+                            out_g = _mm_min_ps(_mm_max_ps(out_g, _mm_set1_ps(0.0f)),
+                                               _mm_set1_ps(1.0f));
+                            out_b = _mm_min_ps(_mm_max_ps(out_b, _mm_set1_ps(0.0f)),
+                                               _mm_set1_ps(1.0f));
+                        }
+
+                        if (output.channels == 4) {
+                            store_rgba4_u8(&output, index, out_r, out_g, out_b, in_a);
+                        } else {
+                            store_rgb4(&output, index, out_r, out_g, out_b);
+                            store_alpha4(&output, index, in_a);
+                        }
                     }
+                } else {
+                    for (; index + 3 < pixels; index += 4) {
+                        __m128 in_r, in_g, in_b, in_a;
+                        __m128 layer_r, layer_g, layer_b, layer_a;
+                        if (background.channels == 4) {
+                            load_rgba4_u8_to_unit_f32_sse(
+                                background.u8 + (index * background.channels),
+                                inv255128,
+                                &in_r,
+                                &in_g,
+                                &in_b,
+                                &in_a
+                            );
+                        } else {
+                            load_rgb4_u8(background.u8, background.channels, index,
+                                         &in_r, &in_g, &in_b);
+                            in_a = _mm_set1_ps(1.0f);
+                        }
 
-                    if (foreground.channels == 4) {
-                        load_rgba4_u8_to_unit_f32_sse(
-                            foreground.u8 + (index * foreground.channels),
-                            inv255128,
-                            &layer_r,
-                            &layer_g,
-                            &layer_b,
-                            &layer_a
-                        );
-                    } else {
-                        load_rgb4_u8(foreground.u8, foreground.channels, index,
-                                     &layer_r, &layer_g, &layer_b);
-                        layer_a = _mm_set1_ps(1.0f);
-                    }
+                        if (foreground.channels == 4) {
+                            load_rgba4_u8_to_unit_f32_sse(
+                                foreground.u8 + (index * foreground.channels),
+                                inv255128,
+                                &layer_r,
+                                &layer_g,
+                                &layer_b,
+                                &layer_a
+                            );
+                        } else {
+                            load_rgb4_u8(foreground.u8, foreground.channels, index,
+                                         &layer_r, &layer_g, &layer_b);
+                            layer_a = _mm_set1_ps(1.0f);
+                        }
 
-                    __m128 comp_alpha = _mm_mul_ps(_mm_min_ps(in_a, layer_a), opacity128);
-                    __m128 new_alpha = mul_add_ps128(_mm_sub_ps(one, in_a), comp_alpha, in_a);
-                    __m128 ratio = _mm_div_ps(comp_alpha, new_alpha);
-                    __m128 mask = _mm_cmpgt_ps(new_alpha, _mm_set1_ps(0.0f));
-                    ratio = _mm_blendv_ps(_mm_set1_ps(0.0f), ratio, mask);
+                        __m128 comp_alpha = _mm_mul_ps(_mm_min_ps(in_a, layer_a), opacity128);
+                        __m128 new_alpha = mul_add_ps128(_mm_sub_ps(one, in_a), comp_alpha, in_a);
+                        __m128 ratio = _mm_div_ps(comp_alpha, new_alpha);
+                        __m128 mask = _mm_cmpgt_ps(new_alpha, _mm_set1_ps(0.0f));
+                        ratio = _mm_blendv_ps(_mm_set1_ps(0.0f), ratio, mask);
 
-                    __m128 comp_r = comp_sse(in_r, layer_r);
-                    __m128 comp_g = comp_sse(in_g, layer_g);
-                    __m128 comp_b = comp_sse(in_b, layer_b);
+                        __m128 comp_r = comp_sse(in_r, layer_r);
+                        __m128 comp_g = comp_sse(in_g, layer_g);
+                        __m128 comp_b = comp_sse(in_b, layer_b);
 
-                    __m128 out_r = mul_add_ps128(comp_r, ratio,
-                                                 _mm_mul_ps(in_r, _mm_sub_ps(one, ratio)));
-                    __m128 out_g = mul_add_ps128(comp_g, ratio,
-                                                 _mm_mul_ps(in_g, _mm_sub_ps(one, ratio)));
-                    __m128 out_b = mul_add_ps128(comp_b, ratio,
-                                                 _mm_mul_ps(in_b, _mm_sub_ps(one, ratio)));
+                        __m128 out_r = mul_add_ps128(comp_r, ratio,
+                                                     _mm_mul_ps(in_r, _mm_sub_ps(one, ratio)));
+                        __m128 out_g = mul_add_ps128(comp_g, ratio,
+                                                     _mm_mul_ps(in_g, _mm_sub_ps(one, ratio)));
+                        __m128 out_b = mul_add_ps128(comp_b, ratio,
+                                                     _mm_mul_ps(in_b, _mm_sub_ps(one, ratio)));
 
-                    if (clip_output) {
-                        out_r = _mm_min_ps(_mm_max_ps(out_r, _mm_set1_ps(0.0f)),
-                                           _mm_set1_ps(1.0f));
-                        out_g = _mm_min_ps(_mm_max_ps(out_g, _mm_set1_ps(0.0f)),
-                                           _mm_set1_ps(1.0f));
-                        out_b = _mm_min_ps(_mm_max_ps(out_b, _mm_set1_ps(0.0f)),
-                                           _mm_set1_ps(1.0f));
-                    }
+                        if (clip_output) {
+                            out_r = _mm_min_ps(_mm_max_ps(out_r, _mm_set1_ps(0.0f)),
+                                               _mm_set1_ps(1.0f));
+                            out_g = _mm_min_ps(_mm_max_ps(out_g, _mm_set1_ps(0.0f)),
+                                               _mm_set1_ps(1.0f));
+                            out_b = _mm_min_ps(_mm_max_ps(out_b, _mm_set1_ps(0.0f)),
+                                               _mm_set1_ps(1.0f));
+                        }
 
-                    if (output.channels == 4) {
-                        store_rgba4_u8(&output, index, out_r, out_g, out_b, in_a);
-                    } else {
-                        store_rgb4(&output, index, out_r, out_g, out_b);
-                        store_alpha4(&output, index, in_a);
+                        if (output.channels == 4) {
+                            store_rgba4_u8(&output, index, out_r, out_g, out_b, in_a);
+                        } else {
+                            store_rgb4(&output, index, out_r, out_g, out_b);
+                            store_alpha4(&output, index, in_a);
+                        }
                     }
                 }
             } else {

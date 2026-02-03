@@ -23,6 +23,7 @@ PyObject *blend_multiply(PyObject *self, PyObject *args)
         args,
         multiply_comp,
         SIMD_BLEND_MODES_SIMD_ARGS(multiply_comp_ps128, multiply_comp_ps256),
+        SIMD_BLEND_MODES_SIMD_U8_ARGS(NULL, NULL),
         0
     );
 }

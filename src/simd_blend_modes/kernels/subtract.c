@@ -23,6 +23,7 @@ PyObject *blend_subtract(PyObject *self, PyObject *args)
         args,
         subtract_comp,
         SIMD_BLEND_MODES_SIMD_ARGS(subtract_comp_ps128, subtract_comp_ps256),
+        SIMD_BLEND_MODES_SIMD_U8_ARGS(NULL, NULL),
         1
     );
 }

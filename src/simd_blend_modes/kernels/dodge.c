@@ -49,6 +49,7 @@ PyObject *blend_dodge(PyObject *self, PyObject *args)
         args,
         dodge_comp,
         SIMD_BLEND_MODES_SIMD_ARGS(dodge_comp_ps128, dodge_comp_ps256),
+        SIMD_BLEND_MODES_SIMD_U8_ARGS(NULL, NULL),
         0
     );
 }
