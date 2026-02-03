@@ -1,3 +1,27 @@
 [build-system]
 requires = ["setuptools>=69", "wheel", "numpy"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "simd-blend-modes"
+version = "1.0.0"
+description = "SIMD-accelerated blend modes"
+readme = "README.md"
+authors = [
+    { name = "Samuel Howard" }
+]
+dependencies = ["numpy"]
+requires-python = ">=3.9"
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C",
+    "Operating System :: OS Independent",
+]
+keywords = [
+    "image",
+    "processing"
+]
+[project.urls]
+"Homepage" = "https://github.com/samhaswon/simd_blend_modes"
+"Bug Tracker" = "https://github.com/samhaswon/simd_blend_modes/issues"
