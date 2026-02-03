@@ -368,6 +368,77 @@ static inline void store_rgba8_u8(BlendOutput *output, npy_intp index,
     store_unit_f32_to_u8_rgba4(r1, g1, b1, a1, out_ptr + 16);
 }
 
+static inline void load_rgba4_f32_to_unit_f32_sse(const float *p, __m128 inv255,
+                                                  __m128 *r, __m128 *g, __m128 *b,
+                                                  __m128 *a) {
+    __m128 row0 = _mm_loadu_ps(p + 0);
+    __m128 row1 = _mm_loadu_ps(p + 4);
+    __m128 row2 = _mm_loadu_ps(p + 8);
+    __m128 row3 = _mm_loadu_ps(p + 12);
+
+    __m128 t0 = _mm_unpacklo_ps(row0, row1);
+    __m128 t1 = _mm_unpackhi_ps(row0, row1);
+    __m128 t2 = _mm_unpacklo_ps(row2, row3);
+    __m128 t3 = _mm_unpackhi_ps(row2, row3);
+
+    *r = _mm_mul_ps(_mm_shuffle_ps(t0, t2, _MM_SHUFFLE(1, 0, 1, 0)), inv255);
+    *g = _mm_mul_ps(_mm_shuffle_ps(t0, t2, _MM_SHUFFLE(3, 2, 3, 2)), inv255);
+    *b = _mm_mul_ps(_mm_shuffle_ps(t1, t3, _MM_SHUFFLE(1, 0, 1, 0)), inv255);
+    *a = _mm_mul_ps(_mm_shuffle_ps(t1, t3, _MM_SHUFFLE(3, 2, 3, 2)), inv255);
+}
+
+static inline void store_rgba4_f32_from_unit_sse(float *p, __m128 r, __m128 g, __m128 b,
+                                                 __m128 a) {
+    __m128 scale = _mm_set1_ps(255.0f);
+    r = _mm_mul_ps(r, scale);
+    g = _mm_mul_ps(g, scale);
+    b = _mm_mul_ps(b, scale);
+    a = _mm_mul_ps(a, scale);
+
+    __m128 t0 = _mm_unpacklo_ps(r, g);
+    __m128 t1 = _mm_unpackhi_ps(r, g);
+    __m128 t2 = _mm_unpacklo_ps(b, a);
+    __m128 t3 = _mm_unpackhi_ps(b, a);
+
+    __m128 row0 = _mm_shuffle_ps(t0, t2, _MM_SHUFFLE(1, 0, 1, 0));
+    __m128 row1 = _mm_shuffle_ps(t0, t2, _MM_SHUFFLE(3, 2, 3, 2));
+    __m128 row2 = _mm_shuffle_ps(t1, t3, _MM_SHUFFLE(1, 0, 1, 0));
+    __m128 row3 = _mm_shuffle_ps(t1, t3, _MM_SHUFFLE(3, 2, 3, 2));
+
+    _mm_storeu_ps(p + 0, row0);
+    _mm_storeu_ps(p + 4, row1);
+    _mm_storeu_ps(p + 8, row2);
+    _mm_storeu_ps(p + 12, row3);
+}
+
+static inline void load_rgba8_f32_to_unit_f32_avx2(const float *p, __m128 inv255,
+                                                   __m256 *r, __m256 *g, __m256 *b,
+                                                   __m256 *a) {
+    __m128 r0, g0, b0, a0;
+    __m128 r1, g1, b1, a1;
+    load_rgba4_f32_to_unit_f32_sse(p, inv255, &r0, &g0, &b0, &a0);
+    load_rgba4_f32_to_unit_f32_sse(p + 16, inv255, &r1, &g1, &b1, &a1);
+    *r = _mm256_set_m128(r1, r0);
+    *g = _mm256_set_m128(g1, g0);
+    *b = _mm256_set_m128(b1, b0);
+    *a = _mm256_set_m128(a1, a0);
+}
+
+static inline void store_rgba8_f32_from_unit_avx2(float *p, __m256 r, __m256 g, __m256 b,
+                                                  __m256 a) {
+    __m128 r0 = _mm256_castps256_ps128(r);
+    __m128 r1 = _mm256_extractf128_ps(r, 1);
+    __m128 g0 = _mm256_castps256_ps128(g);
+    __m128 g1 = _mm256_extractf128_ps(g, 1);
+    __m128 b0 = _mm256_castps256_ps128(b);
+    __m128 b1 = _mm256_extractf128_ps(b, 1);
+    __m128 a0 = _mm256_castps256_ps128(a);
+    __m128 a1 = _mm256_extractf128_ps(a, 1);
+
+    store_rgba4_f32_from_unit_sse(p, r0, g0, b0, a0);
+    store_rgba4_f32_from_unit_sse(p + 16, r1, g1, b1, a1);
+}
+
 /* ---------- SSE4.2 skeleton (process 4 pixels via manual loads) ---------- */
 
 static inline __m128 load4_u8_to_unit_f32(const uint8_t *p) {
@@ -823,6 +894,15 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
                     &in_b,
                     &in_a
                 );
+            } else if (!background.is_uint8 && background.channels == 4) {
+                load_rgba8_f32_to_unit_f32_avx2(
+                    background.f32 + (index * background.channels),
+                    inv255128,
+                    &in_r,
+                    &in_g,
+                    &in_b,
+                    &in_a
+                );
             } else {
                 load_rgb8(&background, index, &in_r, &in_g, &in_b);
                 in_a = load_alpha8(&background, index);
@@ -832,6 +912,15 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
                 load_rgba8_u8_to_unit_f32_avx2(
                     foreground.u8 + (index * foreground.channels),
                     inv255256,
+                    &layer_r,
+                    &layer_g,
+                    &layer_b,
+                    &layer_a
+                );
+            } else if (!foreground.is_uint8 && foreground.channels == 4) {
+                load_rgba8_f32_to_unit_f32_avx2(
+                    foreground.f32 + (index * foreground.channels),
+                    inv255128,
                     &layer_r,
                     &layer_g,
                     &layer_b,
@@ -867,6 +956,14 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
 
             if (output.is_uint8 && output.channels == 4) {
                 store_rgba8_u8(&output, index, out_r, out_g, out_b, in_a);
+            } else if (!output.is_uint8 && output.channels == 4) {
+                store_rgba8_f32_from_unit_avx2(
+                    output.f32 + (index * output.channels),
+                    out_r,
+                    out_g,
+                    out_b,
+                    in_a
+                );
             } else {
                 store_rgb8(&output, index, out_r, out_g, out_b);
                 store_alpha8(&output, index, in_a);
@@ -889,6 +986,15 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
                     &in_b,
                     &in_a
                 );
+            } else if (!background.is_uint8 && background.channels == 4) {
+                load_rgba4_f32_to_unit_f32_sse(
+                    background.f32 + (index * background.channels),
+                    inv255128,
+                    &in_r,
+                    &in_g,
+                    &in_b,
+                    &in_a
+                );
             } else {
                 load_rgb4(&background, index, &in_r, &in_g, &in_b);
                 in_a = load_alpha4(&background, index);
@@ -897,6 +1003,15 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
             if (foreground.is_uint8 && foreground.channels == 4) {
                 load_rgba4_u8_to_unit_f32_sse(
                     foreground.u8 + (index * foreground.channels),
+                    inv255128,
+                    &layer_r,
+                    &layer_g,
+                    &layer_b,
+                    &layer_a
+                );
+            } else if (!foreground.is_uint8 && foreground.channels == 4) {
+                load_rgba4_f32_to_unit_f32_sse(
+                    foreground.f32 + (index * foreground.channels),
                     inv255128,
                     &layer_r,
                     &layer_g,
@@ -933,6 +1048,14 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
 
             if (output.is_uint8 && output.channels == 4) {
                 store_rgba4_u8(&output, index, out_r, out_g, out_b, in_a);
+            } else if (!output.is_uint8 && output.channels == 4) {
+                store_rgba4_f32_from_unit_sse(
+                    output.f32 + (index * output.channels),
+                    out_r,
+                    out_g,
+                    out_b,
+                    in_a
+                );
             } else {
                 store_rgb4(&output, index, out_r, out_g, out_b);
                 store_alpha4(&output, index, in_a);
@@ -1078,6 +1201,15 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
                     &in_b,
                     &in_a
                 );
+            } else if (!background.is_uint8 && background.channels == 4) {
+                load_rgba8_f32_to_unit_f32_avx2(
+                    background.f32 + (index * background.channels),
+                    inv255128,
+                    &in_r,
+                    &in_g,
+                    &in_b,
+                    &in_a
+                );
             } else {
                 load_rgb8(&background, index, &in_r, &in_g, &in_b);
                 in_a = load_alpha8(&background, index);
@@ -1087,6 +1219,15 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
                 load_rgba8_u8_to_unit_f32_avx2(
                     foreground.u8 + (index * foreground.channels),
                     inv255256,
+                    &layer_r,
+                    &layer_g,
+                    &layer_b,
+                    &layer_a
+                );
+            } else if (!foreground.is_uint8 && foreground.channels == 4) {
+                load_rgba8_f32_to_unit_f32_avx2(
+                    foreground.f32 + (index * foreground.channels),
+                    inv255128,
                     &layer_r,
                     &layer_g,
                     &layer_b,
@@ -1121,6 +1262,14 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
 
             if (output.is_uint8 && output.channels == 4) {
                 store_rgba8_u8(&output, index, out_r, out_g, out_b, out_a);
+            } else if (!output.is_uint8 && output.channels == 4) {
+                store_rgba8_f32_from_unit_avx2(
+                    output.f32 + (index * output.channels),
+                    out_r,
+                    out_g,
+                    out_b,
+                    out_a
+                );
             } else {
                 store_rgb8(&output, index, out_r, out_g, out_b);
                 store_alpha8(&output, index, out_a);
@@ -1143,6 +1292,15 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
                     &in_b,
                     &in_a
                 );
+            } else if (!background.is_uint8 && background.channels == 4) {
+                load_rgba4_f32_to_unit_f32_sse(
+                    background.f32 + (index * background.channels),
+                    inv255128,
+                    &in_r,
+                    &in_g,
+                    &in_b,
+                    &in_a
+                );
             } else {
                 load_rgb4(&background, index, &in_r, &in_g, &in_b);
                 in_a = load_alpha4(&background, index);
@@ -1151,6 +1309,15 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
             if (foreground.is_uint8 && foreground.channels == 4) {
                 load_rgba4_u8_to_unit_f32_sse(
                     foreground.u8 + (index * foreground.channels),
+                    inv255128,
+                    &layer_r,
+                    &layer_g,
+                    &layer_b,
+                    &layer_a
+                );
+            } else if (!foreground.is_uint8 && foreground.channels == 4) {
+                load_rgba4_f32_to_unit_f32_sse(
+                    foreground.f32 + (index * foreground.channels),
                     inv255128,
                     &layer_r,
                     &layer_g,
@@ -1186,6 +1353,14 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
 
             if (output.is_uint8 && output.channels == 4) {
                 store_rgba4_u8(&output, index, out_r, out_g, out_b, out_a);
+            } else if (!output.is_uint8 && output.channels == 4) {
+                store_rgba4_f32_from_unit_sse(
+                    output.f32 + (index * output.channels),
+                    out_r,
+                    out_g,
+                    out_b,
+                    out_a
+                );
             } else {
                 store_rgb4(&output, index, out_r, out_g, out_b);
                 store_alpha4(&output, index, out_a);
