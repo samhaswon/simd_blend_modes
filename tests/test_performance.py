@@ -37,8 +37,8 @@ def _iterations_for_size(height: int, width: int) -> int:
     if pixels <= 256 * 256:
         return 5
     if pixels <= 1024 * 1024:
-        return 3
-    return 1
+        return 4
+    return 3
 
 
 def _blend_reference(func: Callable[..., np.ndarray], bg: np.ndarray, fg: np.ndarray) -> None:

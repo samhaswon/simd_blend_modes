@@ -885,6 +885,7 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
 
     npy_intp pixels = height * width;
     npy_intp index = 0;
+    NPY_BEGIN_ALLOW_THREADS
 #if SIMD_BLEND_MODES_X86
     const __m128 one = _mm_set1_ps(1.0f);
     const __m256 one256 = _mm256_set1_ps(1.0f);
@@ -1166,7 +1167,7 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
             write_channel(&output, bg_offset + 3, in_a);
         }
     }
-
+    NPY_END_ALLOW_THREADS
     Py_XDECREF(kernel_hold);
     release_blend_inputs(&background, &foreground);
     return (PyObject *)output.array;
@@ -1202,6 +1203,7 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
             return NULL;
         }
         npy_intp pixels = height * width;
+        NPY_BEGIN_ALLOW_THREADS
         for (npy_intp index = 0; index < pixels; ++index) {
             npy_intp fg_offset = index * foreground.channels;
             npy_intp out_offset = index * output.channels;
@@ -1213,6 +1215,7 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
                 write_channel(&output, out_offset + 3, 1.0f);
             }
         }
+        NPY_END_ALLOW_THREADS
         Py_XDECREF(kernel_hold);
         release_blend_inputs(&background, &foreground);
         return (PyObject *)output.array;
@@ -1228,6 +1231,7 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
 
     npy_intp pixels = height * width;
     npy_intp index = 0;
+    NPY_BEGIN_ALLOW_THREADS
 #if SIMD_BLEND_MODES_X86
     const __m128 one = _mm_set1_ps(1.0f);
     const __m256 one256 = _mm256_set1_ps(1.0f);
@@ -1502,7 +1506,7 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
             write_channel(&output, bg_offset + 3, out_a);
         }
     }
-
+    NPY_END_ALLOW_THREADS
     Py_XDECREF(kernel_hold);
     release_blend_inputs(&background, &foreground);
     return (PyObject *)output.array;
