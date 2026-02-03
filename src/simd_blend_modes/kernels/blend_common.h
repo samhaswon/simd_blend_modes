@@ -999,6 +999,28 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
         release_blend_inputs(&background, &foreground);
         return (PyObject *)output.array;
     }
+    if (opacity >= 1.0f && foreground.channels == 3) {
+        if (!alloc_output(&background, height, width, &output)) {
+            Py_XDECREF(kernel_hold);
+            release_blend_inputs(&background, &foreground);
+            return NULL;
+        }
+        npy_intp pixels = height * width;
+        for (npy_intp index = 0; index < pixels; ++index) {
+            npy_intp fg_offset = index * foreground.channels;
+            npy_intp out_offset = index * output.channels;
+            for (int c = 0; c < 3; ++c) {
+                float value = read_channel(&foreground, fg_offset + c);
+                write_channel(&output, out_offset + c, value);
+            }
+            if (output.channels == 4) {
+                write_channel(&output, out_offset + 3, 1.0f);
+            }
+        }
+        Py_XDECREF(kernel_hold);
+        release_blend_inputs(&background, &foreground);
+        return (PyObject *)output.array;
+    }
 
     if (!alloc_output(&background, height, width, &output)) {
         Py_XDECREF(kernel_hold);
