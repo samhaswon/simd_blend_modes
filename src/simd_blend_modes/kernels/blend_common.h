@@ -546,28 +546,124 @@ static inline float clamp01(float value) {
     return value;
 }
 
+static inline float read_channel_u8(const uint8_t *data, npy_intp index) {
+    return ((float)data[index]) / 255.0f;
+}
+
+static inline float read_channel_f32(const float *data, npy_intp index) {
+    return data[index] / 255.0f;
+}
+
 static inline float read_channel(const BlendArray *array, npy_intp index) {
     if (array->is_uint8) {
-        return ((float)array->u8[index]) / 255.0f;
+        return read_channel_u8(array->u8, index);
     }
-    return array->f32[index] / 255.0f;
+    return read_channel_f32(array->f32, index);
+}
+
+static inline void write_channel_u8(uint8_t *data, npy_intp index, float value) {
+    float scaled = value * 255.0f;
+    if (scaled < 0.0f) {
+        scaled = 0.0f;
+    } else if (scaled > 255.0f) {
+        scaled = 255.0f;
+    }
+    data[index] = (uint8_t)lroundf(scaled);
+}
+
+static inline void write_channel_f32(float *data, npy_intp index, float value) {
+    data[index] = value * 255.0f;
 }
 
 static inline void write_channel(BlendOutput *output, npy_intp index, float value) {
-    float scaled = value * 255.0f;
     if (output->is_uint8) {
-        if (scaled < 0.0f) {
-            scaled = 0.0f;
-        } else if (scaled > 255.0f) {
-            scaled = 255.0f;
-        }
-        output->u8[index] = (uint8_t)lroundf(scaled);
+        write_channel_u8(output->u8, index, value);
         return;
     }
-    output->f32[index] = scaled;
+    write_channel_f32(output->f32, index, value);
 }
 
 #if SIMD_BLEND_MODES_X86
+static inline void load_rgb4_u8(const uint8_t *data, int channels, npy_intp index,
+                                __m128 *r, __m128 *g, __m128 *b) {
+    npy_intp base0 = (index + 0) * channels;
+    npy_intp base1 = (index + 1) * channels;
+    npy_intp base2 = (index + 2) * channels;
+    npy_intp base3 = (index + 3) * channels;
+
+    float r0 = read_channel_u8(data, base0 + 0);
+    float g0 = read_channel_u8(data, base0 + 1);
+    float b0 = read_channel_u8(data, base0 + 2);
+    float r1 = read_channel_u8(data, base1 + 0);
+    float g1 = read_channel_u8(data, base1 + 1);
+    float b1 = read_channel_u8(data, base1 + 2);
+    float r2 = read_channel_u8(data, base2 + 0);
+    float g2 = read_channel_u8(data, base2 + 1);
+    float b2 = read_channel_u8(data, base2 + 2);
+    float r3 = read_channel_u8(data, base3 + 0);
+    float g3 = read_channel_u8(data, base3 + 1);
+    float b3 = read_channel_u8(data, base3 + 2);
+
+    *r = _mm_set_ps(r3, r2, r1, r0);
+    *g = _mm_set_ps(g3, g2, g1, g0);
+    *b = _mm_set_ps(b3, b2, b1, b0);
+}
+
+static inline void load_rgb4_f32(const float *data, int channels, npy_intp index,
+                                 __m128 *r, __m128 *g, __m128 *b) {
+    npy_intp base0 = (index + 0) * channels;
+    npy_intp base1 = (index + 1) * channels;
+    npy_intp base2 = (index + 2) * channels;
+    npy_intp base3 = (index + 3) * channels;
+
+    float r0 = read_channel_f32(data, base0 + 0);
+    float g0 = read_channel_f32(data, base0 + 1);
+    float b0 = read_channel_f32(data, base0 + 2);
+    float r1 = read_channel_f32(data, base1 + 0);
+    float g1 = read_channel_f32(data, base1 + 1);
+    float b1 = read_channel_f32(data, base1 + 2);
+    float r2 = read_channel_f32(data, base2 + 0);
+    float g2 = read_channel_f32(data, base2 + 1);
+    float b2 = read_channel_f32(data, base2 + 2);
+    float r3 = read_channel_f32(data, base3 + 0);
+    float g3 = read_channel_f32(data, base3 + 1);
+    float b3 = read_channel_f32(data, base3 + 2);
+
+    *r = _mm_set_ps(r3, r2, r1, r0);
+    *g = _mm_set_ps(g3, g2, g1, g0);
+    *b = _mm_set_ps(b3, b2, b1, b0);
+}
+
+static inline __m128 load_alpha4_u8(const uint8_t *data, int channels, npy_intp index) {
+    if (channels == 4) {
+        npy_intp base0 = (index + 0) * channels + 3;
+        npy_intp base1 = (index + 1) * channels + 3;
+        npy_intp base2 = (index + 2) * channels + 3;
+        npy_intp base3 = (index + 3) * channels + 3;
+        float a0 = read_channel_u8(data, base0);
+        float a1 = read_channel_u8(data, base1);
+        float a2 = read_channel_u8(data, base2);
+        float a3 = read_channel_u8(data, base3);
+        return _mm_set_ps(a3, a2, a1, a0);
+    }
+    return _mm_set1_ps(1.0f);
+}
+
+static inline __m128 load_alpha4_f32(const float *data, int channels, npy_intp index) {
+    if (channels == 4) {
+        npy_intp base0 = (index + 0) * channels + 3;
+        npy_intp base1 = (index + 1) * channels + 3;
+        npy_intp base2 = (index + 2) * channels + 3;
+        npy_intp base3 = (index + 3) * channels + 3;
+        float a0 = read_channel_f32(data, base0);
+        float a1 = read_channel_f32(data, base1);
+        float a2 = read_channel_f32(data, base2);
+        float a3 = read_channel_f32(data, base3);
+        return _mm_set_ps(a3, a2, a1, a0);
+    }
+    return _mm_set1_ps(1.0f);
+}
+
 static inline void load_rgb4(const BlendArray *array, npy_intp index,
                              __m128 *r, __m128 *g, __m128 *b) {
     npy_intp base0 = (index + 0) * array->channels;
@@ -651,6 +747,62 @@ static inline void load_rgb8(const BlendArray *array, npy_intp index,
     *r = _mm256_set_ps(rv[7], rv[6], rv[5], rv[4], rv[3], rv[2], rv[1], rv[0]);
     *g = _mm256_set_ps(gv[7], gv[6], gv[5], gv[4], gv[3], gv[2], gv[1], gv[0]);
     *b = _mm256_set_ps(bv[7], bv[6], bv[5], bv[4], bv[3], bv[2], bv[1], bv[0]);
+}
+
+static inline void load_rgb8_u8(const uint8_t *data, int channels, npy_intp index,
+                                __m256 *r, __m256 *g, __m256 *b) {
+    float rv[8];
+    float gv[8];
+    float bv[8];
+    for (int i = 0; i < 8; ++i) {
+        npy_intp base = (index + i) * channels;
+        rv[i] = read_channel_u8(data, base + 0);
+        gv[i] = read_channel_u8(data, base + 1);
+        bv[i] = read_channel_u8(data, base + 2);
+    }
+    *r = _mm256_set_ps(rv[7], rv[6], rv[5], rv[4], rv[3], rv[2], rv[1], rv[0]);
+    *g = _mm256_set_ps(gv[7], gv[6], gv[5], gv[4], gv[3], gv[2], gv[1], gv[0]);
+    *b = _mm256_set_ps(bv[7], bv[6], bv[5], bv[4], bv[3], bv[2], bv[1], bv[0]);
+}
+
+static inline void load_rgb8_f32(const float *data, int channels, npy_intp index,
+                                 __m256 *r, __m256 *g, __m256 *b) {
+    float rv[8];
+    float gv[8];
+    float bv[8];
+    for (int i = 0; i < 8; ++i) {
+        npy_intp base = (index + i) * channels;
+        rv[i] = read_channel_f32(data, base + 0);
+        gv[i] = read_channel_f32(data, base + 1);
+        bv[i] = read_channel_f32(data, base + 2);
+    }
+    *r = _mm256_set_ps(rv[7], rv[6], rv[5], rv[4], rv[3], rv[2], rv[1], rv[0]);
+    *g = _mm256_set_ps(gv[7], gv[6], gv[5], gv[4], gv[3], gv[2], gv[1], gv[0]);
+    *b = _mm256_set_ps(bv[7], bv[6], bv[5], bv[4], bv[3], bv[2], bv[1], bv[0]);
+}
+
+static inline __m256 load_alpha8_u8(const uint8_t *data, int channels, npy_intp index) {
+    if (channels == 4) {
+        float av[8];
+        for (int i = 0; i < 8; ++i) {
+            npy_intp base = (index + i) * channels + 3;
+            av[i] = read_channel_u8(data, base);
+        }
+        return _mm256_set_ps(av[7], av[6], av[5], av[4], av[3], av[2], av[1], av[0]);
+    }
+    return _mm256_set1_ps(1.0f);
+}
+
+static inline __m256 load_alpha8_f32(const float *data, int channels, npy_intp index) {
+    if (channels == 4) {
+        float av[8];
+        for (int i = 0; i < 8; ++i) {
+            npy_intp base = (index + i) * channels + 3;
+            av[i] = read_channel_f32(data, base);
+        }
+        return _mm256_set_ps(av[7], av[6], av[5], av[4], av[3], av[2], av[1], av[0]);
+    }
+    return _mm256_set1_ps(1.0f);
 }
 
 static inline __m256 load_alpha8(const BlendArray *array, npy_intp index) {
@@ -897,124 +1049,331 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
 #if defined(__AVX2__)
     if (kernel == KERNEL_AVX2) {
         const npy_intp prefetch_distance = 16;
-        for (; index + 7 < pixels; index += 8) {
-            npy_intp prefetch_index = index + prefetch_distance;
-            if (background.is_uint8) {
-                _mm_prefetch((const char *)(background.u8 + (prefetch_index * background.channels)),
-                             _MM_HINT_T0);
-            } else {
-                _mm_prefetch((const char *)(background.f32 + (prefetch_index * background.channels)),
-                             _MM_HINT_T0);
-            }
+        if (background.is_uint8) {
             if (foreground.is_uint8) {
-                _mm_prefetch((const char *)(foreground.u8 + (prefetch_index * foreground.channels)),
-                             _MM_HINT_T0);
+                for (; index + 7 < pixels; index += 8) {
+                    npy_intp prefetch_index = index + prefetch_distance;
+                    _mm_prefetch((const char *)(background.u8 + (prefetch_index * background.channels)),
+                                 _MM_HINT_T0);
+                    _mm_prefetch((const char *)(foreground.u8 + (prefetch_index * foreground.channels)),
+                                 _MM_HINT_T0);
+
+                    __m256 in_r, in_g, in_b, in_a;
+                    __m256 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba8_u8_to_unit_f32_avx2(
+                            background.u8 + (index * background.channels),
+                            inv255256,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb8_u8(background.u8, background.channels, index, &in_r, &in_g, &in_b);
+                        in_a = _mm256_set1_ps(1.0f);
+                    }
+
+                    if (foreground.channels == 4) {
+                        load_rgba8_u8_to_unit_f32_avx2(
+                            foreground.u8 + (index * foreground.channels),
+                            inv255256,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb8_u8(foreground.u8, foreground.channels, index,
+                                     &layer_r, &layer_g, &layer_b);
+                        layer_a = _mm256_set1_ps(1.0f);
+                    }
+
+                    __m256 comp_alpha = _mm256_mul_ps(_mm256_min_ps(in_a, layer_a), opacity256);
+                    __m256 new_alpha = mul_add_ps256(_mm256_sub_ps(one256, in_a), comp_alpha, in_a);
+                    __m256 ratio = _mm256_div_ps(comp_alpha, new_alpha);
+                    __m256 mask = _mm256_cmp_ps(new_alpha, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
+                    ratio = _mm256_blendv_ps(_mm256_set1_ps(0.0f), ratio, mask);
+
+                    __m256 comp_r = comp_avx(in_r, layer_r);
+                    __m256 comp_g = comp_avx(in_g, layer_g);
+                    __m256 comp_b = comp_avx(in_b, layer_b);
+
+                    __m256 out_r = mul_add_ps256(comp_r, ratio,
+                                                 _mm256_mul_ps(in_r, _mm256_sub_ps(one256, ratio)));
+                    __m256 out_g = mul_add_ps256(comp_g, ratio,
+                                                 _mm256_mul_ps(in_g, _mm256_sub_ps(one256, ratio)));
+                    __m256 out_b = mul_add_ps256(comp_b, ratio,
+                                                 _mm256_mul_ps(in_b, _mm256_sub_ps(one256, ratio)));
+
+                    if (clip_output) {
+                        out_r = _mm256_min_ps(_mm256_max_ps(out_r, _mm256_set1_ps(0.0f)),
+                                              _mm256_set1_ps(1.0f));
+                        out_g = _mm256_min_ps(_mm256_max_ps(out_g, _mm256_set1_ps(0.0f)),
+                                              _mm256_set1_ps(1.0f));
+                        out_b = _mm256_min_ps(_mm256_max_ps(out_b, _mm256_set1_ps(0.0f)),
+                                              _mm256_set1_ps(1.0f));
+                    }
+
+                    if (output.channels == 4) {
+                        store_rgba8_u8(&output, index, out_r, out_g, out_b, in_a);
+                    } else {
+                        store_rgb8(&output, index, out_r, out_g, out_b);
+                        store_alpha8(&output, index, in_a);
+                    }
+                }
             } else {
-                _mm_prefetch((const char *)(foreground.f32 + (prefetch_index * foreground.channels)),
-                             _MM_HINT_T0);
+                for (; index + 7 < pixels; index += 8) {
+                    npy_intp prefetch_index = index + prefetch_distance;
+                    _mm_prefetch((const char *)(background.u8 + (prefetch_index * background.channels)),
+                                 _MM_HINT_T0);
+                    _mm_prefetch((const char *)(foreground.f32 + (prefetch_index * foreground.channels)),
+                                 _MM_HINT_T0);
+
+                    __m256 in_r, in_g, in_b, in_a;
+                    __m256 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba8_u8_to_unit_f32_avx2(
+                            background.u8 + (index * background.channels),
+                            inv255256,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb8_u8(background.u8, background.channels, index, &in_r, &in_g, &in_b);
+                        in_a = _mm256_set1_ps(1.0f);
+                    }
+
+                    if (foreground.channels == 4) {
+                        load_rgba8_f32_to_unit_f32_avx2(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb8_f32_to_unit_f32_avx2(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b
+                        );
+                        layer_a = _mm256_set1_ps(1.0f);
+                    }
+
+                    __m256 comp_alpha = _mm256_mul_ps(_mm256_min_ps(in_a, layer_a), opacity256);
+                    __m256 new_alpha = mul_add_ps256(_mm256_sub_ps(one256, in_a), comp_alpha, in_a);
+                    __m256 ratio = _mm256_div_ps(comp_alpha, new_alpha);
+                    __m256 mask = _mm256_cmp_ps(new_alpha, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
+                    ratio = _mm256_blendv_ps(_mm256_set1_ps(0.0f), ratio, mask);
+
+                    __m256 comp_r = comp_avx(in_r, layer_r);
+                    __m256 comp_g = comp_avx(in_g, layer_g);
+                    __m256 comp_b = comp_avx(in_b, layer_b);
+
+                    __m256 out_r = mul_add_ps256(comp_r, ratio,
+                                                 _mm256_mul_ps(in_r, _mm256_sub_ps(one256, ratio)));
+                    __m256 out_g = mul_add_ps256(comp_g, ratio,
+                                                 _mm256_mul_ps(in_g, _mm256_sub_ps(one256, ratio)));
+                    __m256 out_b = mul_add_ps256(comp_b, ratio,
+                                                 _mm256_mul_ps(in_b, _mm256_sub_ps(one256, ratio)));
+
+                    if (clip_output) {
+                        out_r = _mm256_min_ps(_mm256_max_ps(out_r, _mm256_set1_ps(0.0f)),
+                                              _mm256_set1_ps(1.0f));
+                        out_g = _mm256_min_ps(_mm256_max_ps(out_g, _mm256_set1_ps(0.0f)),
+                                              _mm256_set1_ps(1.0f));
+                        out_b = _mm256_min_ps(_mm256_max_ps(out_b, _mm256_set1_ps(0.0f)),
+                                              _mm256_set1_ps(1.0f));
+                    }
+
+                    if (output.channels == 4) {
+                        store_rgba8_u8(&output, index, out_r, out_g, out_b, in_a);
+                    } else {
+                        store_rgb8(&output, index, out_r, out_g, out_b);
+                        store_alpha8(&output, index, in_a);
+                    }
+                }
             }
-            __m256 in_r, in_g, in_b, in_a;
-            __m256 layer_r, layer_g, layer_b, layer_a;
-            if (background.is_uint8 && background.channels == 4) {
-                load_rgba8_u8_to_unit_f32_avx2(
-                    background.u8 + (index * background.channels),
-                    inv255256,
-                    &in_r,
-                    &in_g,
-                    &in_b,
-                    &in_a
-                );
-            } else if (!background.is_uint8 && background.channels == 4) {
-                load_rgba8_f32_to_unit_f32_avx2(
-                    background.f32 + (index * background.channels),
-                    inv255128,
-                    &in_r,
-                    &in_g,
-                    &in_b,
-                    &in_a
-                );
-            } else if (!background.is_uint8 && background.channels == 3) {
-                load_rgb8_f32_to_unit_f32_avx2(
-                    background.f32 + (index * background.channels),
-                    inv255128,
-                    &in_r,
-                    &in_g,
-                    &in_b
-                );
-                in_a = _mm256_set1_ps(1.0f);
+        } else {
+            if (foreground.is_uint8) {
+                for (; index + 7 < pixels; index += 8) {
+                    npy_intp prefetch_index = index + prefetch_distance;
+                    _mm_prefetch((const char *)(background.f32 + (prefetch_index * background.channels)),
+                                 _MM_HINT_T0);
+                    _mm_prefetch((const char *)(foreground.u8 + (prefetch_index * foreground.channels)),
+                                 _MM_HINT_T0);
+
+                    __m256 in_r, in_g, in_b, in_a;
+                    __m256 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba8_f32_to_unit_f32_avx2(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb8_f32_to_unit_f32_avx2(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b
+                        );
+                        in_a = _mm256_set1_ps(1.0f);
+                    }
+
+                    if (foreground.channels == 4) {
+                        load_rgba8_u8_to_unit_f32_avx2(
+                            foreground.u8 + (index * foreground.channels),
+                            inv255256,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb8_u8(foreground.u8, foreground.channels, index,
+                                     &layer_r, &layer_g, &layer_b);
+                        layer_a = _mm256_set1_ps(1.0f);
+                    }
+
+                    __m256 comp_alpha = _mm256_mul_ps(_mm256_min_ps(in_a, layer_a), opacity256);
+                    __m256 new_alpha = mul_add_ps256(_mm256_sub_ps(one256, in_a), comp_alpha, in_a);
+                    __m256 ratio = _mm256_div_ps(comp_alpha, new_alpha);
+                    __m256 mask = _mm256_cmp_ps(new_alpha, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
+                    ratio = _mm256_blendv_ps(_mm256_set1_ps(0.0f), ratio, mask);
+
+                    __m256 comp_r = comp_avx(in_r, layer_r);
+                    __m256 comp_g = comp_avx(in_g, layer_g);
+                    __m256 comp_b = comp_avx(in_b, layer_b);
+
+                    __m256 out_r = mul_add_ps256(comp_r, ratio,
+                                                 _mm256_mul_ps(in_r, _mm256_sub_ps(one256, ratio)));
+                    __m256 out_g = mul_add_ps256(comp_g, ratio,
+                                                 _mm256_mul_ps(in_g, _mm256_sub_ps(one256, ratio)));
+                    __m256 out_b = mul_add_ps256(comp_b, ratio,
+                                                 _mm256_mul_ps(in_b, _mm256_sub_ps(one256, ratio)));
+
+                    if (clip_output) {
+                        out_r = _mm256_min_ps(_mm256_max_ps(out_r, _mm256_set1_ps(0.0f)),
+                                              _mm256_set1_ps(1.0f));
+                        out_g = _mm256_min_ps(_mm256_max_ps(out_g, _mm256_set1_ps(0.0f)),
+                                              _mm256_set1_ps(1.0f));
+                        out_b = _mm256_min_ps(_mm256_max_ps(out_b, _mm256_set1_ps(0.0f)),
+                                              _mm256_set1_ps(1.0f));
+                    }
+
+                    if (output.channels == 4) {
+                        store_rgba8_f32_from_unit_avx2(
+                            output.f32 + (index * output.channels),
+                            out_r,
+                            out_g,
+                            out_b,
+                            in_a
+                        );
+                    } else {
+                        store_rgb8(&output, index, out_r, out_g, out_b);
+                        store_alpha8(&output, index, in_a);
+                    }
+                }
             } else {
-                load_rgb8(&background, index, &in_r, &in_g, &in_b);
-                in_a = load_alpha8(&background, index);
-            }
+                for (; index + 7 < pixels; index += 8) {
+                    npy_intp prefetch_index = index + prefetch_distance;
+                    _mm_prefetch((const char *)(background.f32 + (prefetch_index * background.channels)),
+                                 _MM_HINT_T0);
+                    _mm_prefetch((const char *)(foreground.f32 + (prefetch_index * foreground.channels)),
+                                 _MM_HINT_T0);
 
-            if (foreground.is_uint8 && foreground.channels == 4) {
-                load_rgba8_u8_to_unit_f32_avx2(
-                    foreground.u8 + (index * foreground.channels),
-                    inv255256,
-                    &layer_r,
-                    &layer_g,
-                    &layer_b,
-                    &layer_a
-                );
-            } else if (!foreground.is_uint8 && foreground.channels == 4) {
-                load_rgba8_f32_to_unit_f32_avx2(
-                    foreground.f32 + (index * foreground.channels),
-                    inv255128,
-                    &layer_r,
-                    &layer_g,
-                    &layer_b,
-                    &layer_a
-                );
-            } else if (!foreground.is_uint8 && foreground.channels == 3) {
-                load_rgb8_f32_to_unit_f32_avx2(
-                    foreground.f32 + (index * foreground.channels),
-                    inv255128,
-                    &layer_r,
-                    &layer_g,
-                    &layer_b
-                );
-                layer_a = _mm256_set1_ps(1.0f);
-            } else {
-                load_rgb8(&foreground, index, &layer_r, &layer_g, &layer_b);
-                layer_a = load_alpha8(&foreground, index);
-            }
+                    __m256 in_r, in_g, in_b, in_a;
+                    __m256 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba8_f32_to_unit_f32_avx2(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb8_f32_to_unit_f32_avx2(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b
+                        );
+                        in_a = _mm256_set1_ps(1.0f);
+                    }
 
-            __m256 comp_alpha = _mm256_mul_ps(_mm256_min_ps(in_a, layer_a), opacity256);
-            __m256 new_alpha = mul_add_ps256(_mm256_sub_ps(one256, in_a), comp_alpha, in_a);
-            __m256 ratio = _mm256_div_ps(comp_alpha, new_alpha);
-            __m256 mask = _mm256_cmp_ps(new_alpha, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
-            ratio = _mm256_blendv_ps(_mm256_set1_ps(0.0f), ratio, mask);
+                    if (foreground.channels == 4) {
+                        load_rgba8_f32_to_unit_f32_avx2(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb8_f32_to_unit_f32_avx2(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b
+                        );
+                        layer_a = _mm256_set1_ps(1.0f);
+                    }
 
-            __m256 comp_r = comp_avx(in_r, layer_r);
-            __m256 comp_g = comp_avx(in_g, layer_g);
-            __m256 comp_b = comp_avx(in_b, layer_b);
+                    __m256 comp_alpha = _mm256_mul_ps(_mm256_min_ps(in_a, layer_a), opacity256);
+                    __m256 new_alpha = mul_add_ps256(_mm256_sub_ps(one256, in_a), comp_alpha, in_a);
+                    __m256 ratio = _mm256_div_ps(comp_alpha, new_alpha);
+                    __m256 mask = _mm256_cmp_ps(new_alpha, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
+                    ratio = _mm256_blendv_ps(_mm256_set1_ps(0.0f), ratio, mask);
 
-            __m256 out_r = mul_add_ps256(comp_r, ratio,
-                                         _mm256_mul_ps(in_r, _mm256_sub_ps(one256, ratio)));
-            __m256 out_g = mul_add_ps256(comp_g, ratio,
-                                         _mm256_mul_ps(in_g, _mm256_sub_ps(one256, ratio)));
-            __m256 out_b = mul_add_ps256(comp_b, ratio,
-                                         _mm256_mul_ps(in_b, _mm256_sub_ps(one256, ratio)));
+                    __m256 comp_r = comp_avx(in_r, layer_r);
+                    __m256 comp_g = comp_avx(in_g, layer_g);
+                    __m256 comp_b = comp_avx(in_b, layer_b);
 
-            if (clip_output) {
-                out_r = _mm256_min_ps(_mm256_max_ps(out_r, _mm256_set1_ps(0.0f)), _mm256_set1_ps(1.0f));
-                out_g = _mm256_min_ps(_mm256_max_ps(out_g, _mm256_set1_ps(0.0f)), _mm256_set1_ps(1.0f));
-                out_b = _mm256_min_ps(_mm256_max_ps(out_b, _mm256_set1_ps(0.0f)), _mm256_set1_ps(1.0f));
-            }
+                    __m256 out_r = mul_add_ps256(comp_r, ratio,
+                                                 _mm256_mul_ps(in_r, _mm256_sub_ps(one256, ratio)));
+                    __m256 out_g = mul_add_ps256(comp_g, ratio,
+                                                 _mm256_mul_ps(in_g, _mm256_sub_ps(one256, ratio)));
+                    __m256 out_b = mul_add_ps256(comp_b, ratio,
+                                                 _mm256_mul_ps(in_b, _mm256_sub_ps(one256, ratio)));
 
-            if (output.is_uint8 && output.channels == 4) {
-                store_rgba8_u8(&output, index, out_r, out_g, out_b, in_a);
-            } else if (!output.is_uint8 && output.channels == 4) {
-                store_rgba8_f32_from_unit_avx2(
-                    output.f32 + (index * output.channels),
-                    out_r,
-                    out_g,
-                    out_b,
-                    in_a
-                );
-            } else {
-                store_rgb8(&output, index, out_r, out_g, out_b);
-                store_alpha8(&output, index, in_a);
+                    if (clip_output) {
+                        out_r = _mm256_min_ps(_mm256_max_ps(out_r, _mm256_set1_ps(0.0f)),
+                                              _mm256_set1_ps(1.0f));
+                        out_g = _mm256_min_ps(_mm256_max_ps(out_g, _mm256_set1_ps(0.0f)),
+                                              _mm256_set1_ps(1.0f));
+                        out_b = _mm256_min_ps(_mm256_max_ps(out_b, _mm256_set1_ps(0.0f)),
+                                              _mm256_set1_ps(1.0f));
+                    }
+
+                    if (output.channels == 4) {
+                        store_rgba8_f32_from_unit_avx2(
+                            output.f32 + (index * output.channels),
+                            out_r,
+                            out_g,
+                            out_b,
+                            in_a
+                        );
+                    } else {
+                        store_rgb8(&output, index, out_r, out_g, out_b);
+                        store_alpha8(&output, index, in_a);
+                    }
+                }
             }
         }
     }
@@ -1022,149 +1381,474 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
 
 #if defined(__SSE4_1__)
     if (kernel == KERNEL_SSE42 || kernel == KERNEL_AVX2) {
-        for (; index + 3 < pixels; index += 4) {
-            __m128 in_r, in_g, in_b, in_a;
-            __m128 layer_r, layer_g, layer_b, layer_a;
-            if (background.is_uint8 && background.channels == 4) {
-                load_rgba4_u8_to_unit_f32_sse(
-                    background.u8 + (index * background.channels),
-                    inv255128,
-                    &in_r,
-                    &in_g,
-                    &in_b,
-                    &in_a
-                );
-            } else if (!background.is_uint8 && background.channels == 4) {
-                load_rgba4_f32_to_unit_f32_sse(
-                    background.f32 + (index * background.channels),
-                    inv255128,
-                    &in_r,
-                    &in_g,
-                    &in_b,
-                    &in_a
-                );
-            } else if (!background.is_uint8 && background.channels == 3) {
-                load_rgb4_f32_to_unit_f32_sse(
-                    background.f32 + (index * background.channels),
-                    inv255128,
-                    &in_r,
-                    &in_g,
-                    &in_b
-                );
-                in_a = _mm_set1_ps(1.0f);
+        if (background.is_uint8) {
+            if (foreground.is_uint8) {
+                for (; index + 3 < pixels; index += 4) {
+                    __m128 in_r, in_g, in_b, in_a;
+                    __m128 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba4_u8_to_unit_f32_sse(
+                            background.u8 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb4_u8(background.u8, background.channels, index,
+                                     &in_r, &in_g, &in_b);
+                        in_a = _mm_set1_ps(1.0f);
+                    }
+
+                    if (foreground.channels == 4) {
+                        load_rgba4_u8_to_unit_f32_sse(
+                            foreground.u8 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb4_u8(foreground.u8, foreground.channels, index,
+                                     &layer_r, &layer_g, &layer_b);
+                        layer_a = _mm_set1_ps(1.0f);
+                    }
+
+                    __m128 comp_alpha = _mm_mul_ps(_mm_min_ps(in_a, layer_a), opacity128);
+                    __m128 new_alpha = mul_add_ps128(_mm_sub_ps(one, in_a), comp_alpha, in_a);
+                    __m128 ratio = _mm_div_ps(comp_alpha, new_alpha);
+                    __m128 mask = _mm_cmpgt_ps(new_alpha, _mm_set1_ps(0.0f));
+                    ratio = _mm_blendv_ps(_mm_set1_ps(0.0f), ratio, mask);
+
+                    __m128 comp_r = comp_sse(in_r, layer_r);
+                    __m128 comp_g = comp_sse(in_g, layer_g);
+                    __m128 comp_b = comp_sse(in_b, layer_b);
+
+                    __m128 out_r = mul_add_ps128(comp_r, ratio,
+                                                 _mm_mul_ps(in_r, _mm_sub_ps(one, ratio)));
+                    __m128 out_g = mul_add_ps128(comp_g, ratio,
+                                                 _mm_mul_ps(in_g, _mm_sub_ps(one, ratio)));
+                    __m128 out_b = mul_add_ps128(comp_b, ratio,
+                                                 _mm_mul_ps(in_b, _mm_sub_ps(one, ratio)));
+
+                    if (clip_output) {
+                        out_r = _mm_min_ps(_mm_max_ps(out_r, _mm_set1_ps(0.0f)),
+                                           _mm_set1_ps(1.0f));
+                        out_g = _mm_min_ps(_mm_max_ps(out_g, _mm_set1_ps(0.0f)),
+                                           _mm_set1_ps(1.0f));
+                        out_b = _mm_min_ps(_mm_max_ps(out_b, _mm_set1_ps(0.0f)),
+                                           _mm_set1_ps(1.0f));
+                    }
+
+                    if (output.channels == 4) {
+                        store_rgba4_u8(&output, index, out_r, out_g, out_b, in_a);
+                    } else {
+                        store_rgb4(&output, index, out_r, out_g, out_b);
+                        store_alpha4(&output, index, in_a);
+                    }
+                }
             } else {
-                load_rgb4(&background, index, &in_r, &in_g, &in_b);
-                in_a = load_alpha4(&background, index);
-            }
+                for (; index + 3 < pixels; index += 4) {
+                    __m128 in_r, in_g, in_b, in_a;
+                    __m128 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba4_u8_to_unit_f32_sse(
+                            background.u8 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb4_u8(background.u8, background.channels, index,
+                                     &in_r, &in_g, &in_b);
+                        in_a = _mm_set1_ps(1.0f);
+                    }
 
-            if (foreground.is_uint8 && foreground.channels == 4) {
-                load_rgba4_u8_to_unit_f32_sse(
-                    foreground.u8 + (index * foreground.channels),
-                    inv255128,
-                    &layer_r,
-                    &layer_g,
-                    &layer_b,
-                    &layer_a
-                );
-            } else if (!foreground.is_uint8 && foreground.channels == 4) {
-                load_rgba4_f32_to_unit_f32_sse(
-                    foreground.f32 + (index * foreground.channels),
-                    inv255128,
-                    &layer_r,
-                    &layer_g,
-                    &layer_b,
-                    &layer_a
-                );
-            } else if (!foreground.is_uint8 && foreground.channels == 3) {
-                load_rgb4_f32_to_unit_f32_sse(
-                    foreground.f32 + (index * foreground.channels),
-                    inv255128,
-                    &layer_r,
-                    &layer_g,
-                    &layer_b
-                );
-                layer_a = _mm_set1_ps(1.0f);
+                    if (foreground.channels == 4) {
+                        load_rgba4_f32_to_unit_f32_sse(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb4_f32_to_unit_f32_sse(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b
+                        );
+                        layer_a = _mm_set1_ps(1.0f);
+                    }
+
+                    __m128 comp_alpha = _mm_mul_ps(_mm_min_ps(in_a, layer_a), opacity128);
+                    __m128 new_alpha = mul_add_ps128(_mm_sub_ps(one, in_a), comp_alpha, in_a);
+                    __m128 ratio = _mm_div_ps(comp_alpha, new_alpha);
+                    __m128 mask = _mm_cmpgt_ps(new_alpha, _mm_set1_ps(0.0f));
+                    ratio = _mm_blendv_ps(_mm_set1_ps(0.0f), ratio, mask);
+
+                    __m128 comp_r = comp_sse(in_r, layer_r);
+                    __m128 comp_g = comp_sse(in_g, layer_g);
+                    __m128 comp_b = comp_sse(in_b, layer_b);
+
+                    __m128 out_r = mul_add_ps128(comp_r, ratio,
+                                                 _mm_mul_ps(in_r, _mm_sub_ps(one, ratio)));
+                    __m128 out_g = mul_add_ps128(comp_g, ratio,
+                                                 _mm_mul_ps(in_g, _mm_sub_ps(one, ratio)));
+                    __m128 out_b = mul_add_ps128(comp_b, ratio,
+                                                 _mm_mul_ps(in_b, _mm_sub_ps(one, ratio)));
+
+                    if (clip_output) {
+                        out_r = _mm_min_ps(_mm_max_ps(out_r, _mm_set1_ps(0.0f)),
+                                           _mm_set1_ps(1.0f));
+                        out_g = _mm_min_ps(_mm_max_ps(out_g, _mm_set1_ps(0.0f)),
+                                           _mm_set1_ps(1.0f));
+                        out_b = _mm_min_ps(_mm_max_ps(out_b, _mm_set1_ps(0.0f)),
+                                           _mm_set1_ps(1.0f));
+                    }
+
+                    if (output.channels == 4) {
+                        store_rgba4_u8(&output, index, out_r, out_g, out_b, in_a);
+                    } else {
+                        store_rgb4(&output, index, out_r, out_g, out_b);
+                        store_alpha4(&output, index, in_a);
+                    }
+                }
+            }
+        } else {
+            if (foreground.is_uint8) {
+                for (; index + 3 < pixels; index += 4) {
+                    __m128 in_r, in_g, in_b, in_a;
+                    __m128 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba4_f32_to_unit_f32_sse(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb4_f32_to_unit_f32_sse(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b
+                        );
+                        in_a = _mm_set1_ps(1.0f);
+                    }
+
+                    if (foreground.channels == 4) {
+                        load_rgba4_u8_to_unit_f32_sse(
+                            foreground.u8 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb4_u8(foreground.u8, foreground.channels, index,
+                                     &layer_r, &layer_g, &layer_b);
+                        layer_a = _mm_set1_ps(1.0f);
+                    }
+
+                    __m128 comp_alpha = _mm_mul_ps(_mm_min_ps(in_a, layer_a), opacity128);
+                    __m128 new_alpha = mul_add_ps128(_mm_sub_ps(one, in_a), comp_alpha, in_a);
+                    __m128 ratio = _mm_div_ps(comp_alpha, new_alpha);
+                    __m128 mask = _mm_cmpgt_ps(new_alpha, _mm_set1_ps(0.0f));
+                    ratio = _mm_blendv_ps(_mm_set1_ps(0.0f), ratio, mask);
+
+                    __m128 comp_r = comp_sse(in_r, layer_r);
+                    __m128 comp_g = comp_sse(in_g, layer_g);
+                    __m128 comp_b = comp_sse(in_b, layer_b);
+
+                    __m128 out_r = mul_add_ps128(comp_r, ratio,
+                                                 _mm_mul_ps(in_r, _mm_sub_ps(one, ratio)));
+                    __m128 out_g = mul_add_ps128(comp_g, ratio,
+                                                 _mm_mul_ps(in_g, _mm_sub_ps(one, ratio)));
+                    __m128 out_b = mul_add_ps128(comp_b, ratio,
+                                                 _mm_mul_ps(in_b, _mm_sub_ps(one, ratio)));
+
+                    if (clip_output) {
+                        out_r = _mm_min_ps(_mm_max_ps(out_r, _mm_set1_ps(0.0f)),
+                                           _mm_set1_ps(1.0f));
+                        out_g = _mm_min_ps(_mm_max_ps(out_g, _mm_set1_ps(0.0f)),
+                                           _mm_set1_ps(1.0f));
+                        out_b = _mm_min_ps(_mm_max_ps(out_b, _mm_set1_ps(0.0f)),
+                                           _mm_set1_ps(1.0f));
+                    }
+
+                    if (output.channels == 4) {
+                        store_rgba4_f32_from_unit_sse(
+                            output.f32 + (index * output.channels),
+                            out_r,
+                            out_g,
+                            out_b,
+                            in_a
+                        );
+                    } else {
+                        store_rgb4(&output, index, out_r, out_g, out_b);
+                        store_alpha4(&output, index, in_a);
+                    }
+                }
             } else {
-                load_rgb4(&foreground, index, &layer_r, &layer_g, &layer_b);
-                layer_a = load_alpha4(&foreground, index);
-            }
+                for (; index + 3 < pixels; index += 4) {
+                    __m128 in_r, in_g, in_b, in_a;
+                    __m128 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba4_f32_to_unit_f32_sse(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb4_f32_to_unit_f32_sse(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b
+                        );
+                        in_a = _mm_set1_ps(1.0f);
+                    }
 
-            __m128 comp_alpha = _mm_mul_ps(_mm_min_ps(in_a, layer_a), opacity128);
-            __m128 new_alpha = mul_add_ps128(_mm_sub_ps(one, in_a), comp_alpha, in_a);
-            __m128 ratio = _mm_div_ps(comp_alpha, new_alpha);
-            __m128 mask = _mm_cmpgt_ps(new_alpha, _mm_set1_ps(0.0f));
-            ratio = _mm_blendv_ps(_mm_set1_ps(0.0f), ratio, mask);
+                    if (foreground.channels == 4) {
+                        load_rgba4_f32_to_unit_f32_sse(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb4_f32_to_unit_f32_sse(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b
+                        );
+                        layer_a = _mm_set1_ps(1.0f);
+                    }
 
-            __m128 comp_r = comp_sse(in_r, layer_r);
-            __m128 comp_g = comp_sse(in_g, layer_g);
-            __m128 comp_b = comp_sse(in_b, layer_b);
+                    __m128 comp_alpha = _mm_mul_ps(_mm_min_ps(in_a, layer_a), opacity128);
+                    __m128 new_alpha = mul_add_ps128(_mm_sub_ps(one, in_a), comp_alpha, in_a);
+                    __m128 ratio = _mm_div_ps(comp_alpha, new_alpha);
+                    __m128 mask = _mm_cmpgt_ps(new_alpha, _mm_set1_ps(0.0f));
+                    ratio = _mm_blendv_ps(_mm_set1_ps(0.0f), ratio, mask);
 
-            __m128 out_r = mul_add_ps128(comp_r, ratio,
-                                         _mm_mul_ps(in_r, _mm_sub_ps(one, ratio)));
-            __m128 out_g = mul_add_ps128(comp_g, ratio,
-                                         _mm_mul_ps(in_g, _mm_sub_ps(one, ratio)));
-            __m128 out_b = mul_add_ps128(comp_b, ratio,
-                                         _mm_mul_ps(in_b, _mm_sub_ps(one, ratio)));
+                    __m128 comp_r = comp_sse(in_r, layer_r);
+                    __m128 comp_g = comp_sse(in_g, layer_g);
+                    __m128 comp_b = comp_sse(in_b, layer_b);
 
-            if (clip_output) {
-                out_r = _mm_min_ps(_mm_max_ps(out_r, _mm_set1_ps(0.0f)), _mm_set1_ps(1.0f));
-                out_g = _mm_min_ps(_mm_max_ps(out_g, _mm_set1_ps(0.0f)), _mm_set1_ps(1.0f));
-                out_b = _mm_min_ps(_mm_max_ps(out_b, _mm_set1_ps(0.0f)), _mm_set1_ps(1.0f));
-            }
+                    __m128 out_r = mul_add_ps128(comp_r, ratio,
+                                                 _mm_mul_ps(in_r, _mm_sub_ps(one, ratio)));
+                    __m128 out_g = mul_add_ps128(comp_g, ratio,
+                                                 _mm_mul_ps(in_g, _mm_sub_ps(one, ratio)));
+                    __m128 out_b = mul_add_ps128(comp_b, ratio,
+                                                 _mm_mul_ps(in_b, _mm_sub_ps(one, ratio)));
 
-            if (output.is_uint8 && output.channels == 4) {
-                store_rgba4_u8(&output, index, out_r, out_g, out_b, in_a);
-            } else if (!output.is_uint8 && output.channels == 4) {
-                store_rgba4_f32_from_unit_sse(
-                    output.f32 + (index * output.channels),
-                    out_r,
-                    out_g,
-                    out_b,
-                    in_a
-                );
-            } else {
-                store_rgb4(&output, index, out_r, out_g, out_b);
-                store_alpha4(&output, index, in_a);
+                    if (clip_output) {
+                        out_r = _mm_min_ps(_mm_max_ps(out_r, _mm_set1_ps(0.0f)),
+                                           _mm_set1_ps(1.0f));
+                        out_g = _mm_min_ps(_mm_max_ps(out_g, _mm_set1_ps(0.0f)),
+                                           _mm_set1_ps(1.0f));
+                        out_b = _mm_min_ps(_mm_max_ps(out_b, _mm_set1_ps(0.0f)),
+                                           _mm_set1_ps(1.0f));
+                    }
+
+                    if (output.channels == 4) {
+                        store_rgba4_f32_from_unit_sse(
+                            output.f32 + (index * output.channels),
+                            out_r,
+                            out_g,
+                            out_b,
+                            in_a
+                        );
+                    } else {
+                        store_rgb4(&output, index, out_r, out_g, out_b);
+                        store_alpha4(&output, index, in_a);
+                    }
+                }
             }
         }
     }
 #endif
 #endif
 
-    for (; index < pixels; ++index) {
-        npy_intp bg_offset = index * background.channels;
-        npy_intp fg_offset = index * foreground.channels;
+    if (background.is_uint8) {
+        const uint8_t *bg = background.u8;
+        uint8_t *out = output.u8;
+        if (foreground.is_uint8) {
+            const uint8_t *fg = foreground.u8;
+            for (; index < pixels; ++index) {
+                npy_intp bg_offset = index * background.channels;
+                npy_intp fg_offset = index * foreground.channels;
 
-        float in_a = 1.0f;
-        float layer_a = 1.0f;
+                float in_a = 1.0f;
+                float layer_a = 1.0f;
 
-        if (background.channels == 4) {
-            in_a = read_channel(&background, bg_offset + 3);
-        }
-        if (foreground.channels == 4) {
-            layer_a = read_channel(&foreground, fg_offset + 3);
-        }
+                if (background.channels == 4) {
+                    in_a = read_channel_u8(bg, bg_offset + 3);
+                }
+                if (foreground.channels == 4) {
+                    layer_a = read_channel_u8(fg, fg_offset + 3);
+                }
 
-        float comp_alpha = fminf(in_a, layer_a) * opacity;
-        float new_alpha = in_a + (1.0f - in_a) * comp_alpha;
-        float ratio = 0.0f;
-        if (new_alpha > 0.0f) {
-            ratio = comp_alpha / new_alpha;
-        }
+                float comp_alpha = fminf(in_a, layer_a) * opacity;
+                float new_alpha = in_a + (1.0f - in_a) * comp_alpha;
+                float ratio = 0.0f;
+                if (new_alpha > 0.0f) {
+                    ratio = comp_alpha / new_alpha;
+                }
 
-        for (int c = 0; c < 3; ++c) {
-            float in_c = read_channel(&background, bg_offset + c);
-            float layer_c = read_channel(&foreground, fg_offset + c);
-            float comp = comp_scalar(in_c, layer_c);
-            float out_c = comp * ratio + in_c * (1.0f - ratio);
-            if (clip_output) {
-                out_c = clamp01(out_c);
+                for (int c = 0; c < 3; ++c) {
+                    float in_c = read_channel_u8(bg, bg_offset + c);
+                    float layer_c = read_channel_u8(fg, fg_offset + c);
+                    float comp = comp_scalar(in_c, layer_c);
+                    float out_c = comp * ratio + in_c * (1.0f - ratio);
+                    if (clip_output) {
+                        out_c = clamp01(out_c);
+                    }
+                    write_channel_u8(out, bg_offset + c, out_c);
+                }
+
+                if (background.channels == 4) {
+                    write_channel_u8(out, bg_offset + 3, in_a);
+                }
             }
-            write_channel(&output, bg_offset + c, out_c);
-        }
+        } else {
+            const float *fg = foreground.f32;
+            for (; index < pixels; ++index) {
+                npy_intp bg_offset = index * background.channels;
+                npy_intp fg_offset = index * foreground.channels;
 
-        if (background.channels == 4) {
-            write_channel(&output, bg_offset + 3, in_a);
+                float in_a = 1.0f;
+                float layer_a = 1.0f;
+
+                if (background.channels == 4) {
+                    in_a = read_channel_u8(bg, bg_offset + 3);
+                }
+                if (foreground.channels == 4) {
+                    layer_a = read_channel_f32(fg, fg_offset + 3);
+                }
+
+                float comp_alpha = fminf(in_a, layer_a) * opacity;
+                float new_alpha = in_a + (1.0f - in_a) * comp_alpha;
+                float ratio = 0.0f;
+                if (new_alpha > 0.0f) {
+                    ratio = comp_alpha / new_alpha;
+                }
+
+                for (int c = 0; c < 3; ++c) {
+                    float in_c = read_channel_u8(bg, bg_offset + c);
+                    float layer_c = read_channel_f32(fg, fg_offset + c);
+                    float comp = comp_scalar(in_c, layer_c);
+                    float out_c = comp * ratio + in_c * (1.0f - ratio);
+                    if (clip_output) {
+                        out_c = clamp01(out_c);
+                    }
+                    write_channel_u8(out, bg_offset + c, out_c);
+                }
+
+                if (background.channels == 4) {
+                    write_channel_u8(out, bg_offset + 3, in_a);
+                }
+            }
+        }
+    } else {
+        const float *bg = background.f32;
+        float *out = output.f32;
+        if (foreground.is_uint8) {
+            const uint8_t *fg = foreground.u8;
+            for (; index < pixels; ++index) {
+                npy_intp bg_offset = index * background.channels;
+                npy_intp fg_offset = index * foreground.channels;
+
+                float in_a = 1.0f;
+                float layer_a = 1.0f;
+
+                if (background.channels == 4) {
+                    in_a = read_channel_f32(bg, bg_offset + 3);
+                }
+                if (foreground.channels == 4) {
+                    layer_a = read_channel_u8(fg, fg_offset + 3);
+                }
+
+                float comp_alpha = fminf(in_a, layer_a) * opacity;
+                float new_alpha = in_a + (1.0f - in_a) * comp_alpha;
+                float ratio = 0.0f;
+                if (new_alpha > 0.0f) {
+                    ratio = comp_alpha / new_alpha;
+                }
+
+                for (int c = 0; c < 3; ++c) {
+                    float in_c = read_channel_f32(bg, bg_offset + c);
+                    float layer_c = read_channel_u8(fg, fg_offset + c);
+                    float comp = comp_scalar(in_c, layer_c);
+                    float out_c = comp * ratio + in_c * (1.0f - ratio);
+                    if (clip_output) {
+                        out_c = clamp01(out_c);
+                    }
+                    write_channel_f32(out, bg_offset + c, out_c);
+                }
+
+                if (background.channels == 4) {
+                    write_channel_f32(out, bg_offset + 3, in_a);
+                }
+            }
+        } else {
+            const float *fg = foreground.f32;
+            for (; index < pixels; ++index) {
+                npy_intp bg_offset = index * background.channels;
+                npy_intp fg_offset = index * foreground.channels;
+
+                float in_a = 1.0f;
+                float layer_a = 1.0f;
+
+                if (background.channels == 4) {
+                    in_a = read_channel_f32(bg, bg_offset + 3);
+                }
+                if (foreground.channels == 4) {
+                    layer_a = read_channel_f32(fg, fg_offset + 3);
+                }
+
+                float comp_alpha = fminf(in_a, layer_a) * opacity;
+                float new_alpha = in_a + (1.0f - in_a) * comp_alpha;
+                float ratio = 0.0f;
+                if (new_alpha > 0.0f) {
+                    ratio = comp_alpha / new_alpha;
+                }
+
+                for (int c = 0; c < 3; ++c) {
+                    float in_c = read_channel_f32(bg, bg_offset + c);
+                    float layer_c = read_channel_f32(fg, fg_offset + c);
+                    float comp = comp_scalar(in_c, layer_c);
+                    float out_c = comp * ratio + in_c * (1.0f - ratio);
+                    if (clip_output) {
+                        out_c = clamp01(out_c);
+                    }
+                    write_channel_f32(out, bg_offset + c, out_c);
+                }
+
+                if (background.channels == 4) {
+                    write_channel_f32(out, bg_offset + 3, in_a);
+                }
+            }
         }
     }
     NPY_END_ALLOW_THREADS
@@ -1204,15 +1888,63 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
         }
         npy_intp pixels = height * width;
         NPY_BEGIN_ALLOW_THREADS
-        for (npy_intp index = 0; index < pixels; ++index) {
-            npy_intp fg_offset = index * foreground.channels;
-            npy_intp out_offset = index * output.channels;
-            for (int c = 0; c < 3; ++c) {
-                float value = read_channel(&foreground, fg_offset + c);
-                write_channel(&output, out_offset + c, value);
+        if (output.is_uint8) {
+            uint8_t *out = output.u8;
+            if (foreground.is_uint8) {
+                const uint8_t *fg = foreground.u8;
+                for (npy_intp index = 0; index < pixels; ++index) {
+                    npy_intp fg_offset = index * foreground.channels;
+                    npy_intp out_offset = index * output.channels;
+                    for (int c = 0; c < 3; ++c) {
+                        float value = read_channel_u8(fg, fg_offset + c);
+                        write_channel_u8(out, out_offset + c, value);
+                    }
+                    if (output.channels == 4) {
+                        write_channel_u8(out, out_offset + 3, 1.0f);
+                    }
+                }
+            } else {
+                const float *fg = foreground.f32;
+                for (npy_intp index = 0; index < pixels; ++index) {
+                    npy_intp fg_offset = index * foreground.channels;
+                    npy_intp out_offset = index * output.channels;
+                    for (int c = 0; c < 3; ++c) {
+                        float value = read_channel_f32(fg, fg_offset + c);
+                        write_channel_u8(out, out_offset + c, value);
+                    }
+                    if (output.channels == 4) {
+                        write_channel_u8(out, out_offset + 3, 1.0f);
+                    }
+                }
             }
-            if (output.channels == 4) {
-                write_channel(&output, out_offset + 3, 1.0f);
+        } else {
+            float *out = output.f32;
+            if (foreground.is_uint8) {
+                const uint8_t *fg = foreground.u8;
+                for (npy_intp index = 0; index < pixels; ++index) {
+                    npy_intp fg_offset = index * foreground.channels;
+                    npy_intp out_offset = index * output.channels;
+                    for (int c = 0; c < 3; ++c) {
+                        float value = read_channel_u8(fg, fg_offset + c);
+                        write_channel_f32(out, out_offset + c, value);
+                    }
+                    if (output.channels == 4) {
+                        write_channel_f32(out, out_offset + 3, 1.0f);
+                    }
+                }
+            } else {
+                const float *fg = foreground.f32;
+                for (npy_intp index = 0; index < pixels; ++index) {
+                    npy_intp fg_offset = index * foreground.channels;
+                    npy_intp out_offset = index * output.channels;
+                    for (int c = 0; c < 3; ++c) {
+                        float value = read_channel_f32(fg, fg_offset + c);
+                        write_channel_f32(out, out_offset + c, value);
+                    }
+                    if (output.channels == 4) {
+                        write_channel_f32(out, out_offset + 3, 1.0f);
+                    }
+                }
             }
         }
         NPY_END_ALLOW_THREADS
@@ -1243,123 +1975,323 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
 #if defined(__AVX2__)
     if (kernel == KERNEL_AVX2) {
         const npy_intp prefetch_distance = 16;
-        for (; index + 7 < pixels; index += 8) {
-            npy_intp prefetch_index = index + prefetch_distance;
-            if (background.is_uint8) {
-                _mm_prefetch((const char *)(background.u8 + (prefetch_index * background.channels)),
-                             _MM_HINT_T0);
-            } else {
-                _mm_prefetch((const char *)(background.f32 + (prefetch_index * background.channels)),
-                             _MM_HINT_T0);
-            }
+        if (background.is_uint8) {
             if (foreground.is_uint8) {
-                _mm_prefetch((const char *)(foreground.u8 + (prefetch_index * foreground.channels)),
-                             _MM_HINT_T0);
+                for (; index + 7 < pixels; index += 8) {
+                    npy_intp prefetch_index = index + prefetch_distance;
+                    _mm_prefetch((const char *)(background.u8 + (prefetch_index * background.channels)),
+                                 _MM_HINT_T0);
+                    _mm_prefetch((const char *)(foreground.u8 + (prefetch_index * foreground.channels)),
+                                 _MM_HINT_T0);
+
+                    __m256 in_r, in_g, in_b, in_a;
+                    __m256 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba8_u8_to_unit_f32_avx2(
+                            background.u8 + (index * background.channels),
+                            inv255256,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb8_u8(background.u8, background.channels, index, &in_r, &in_g, &in_b);
+                        in_a = _mm256_set1_ps(1.0f);
+                    }
+
+                    if (foreground.channels == 4) {
+                        load_rgba8_u8_to_unit_f32_avx2(
+                            foreground.u8 + (index * foreground.channels),
+                            inv255256,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb8_u8(foreground.u8, foreground.channels, index,
+                                     &layer_r, &layer_g, &layer_b);
+                        layer_a = _mm256_set1_ps(1.0f);
+                    }
+                    __m256 layer_opacity = _mm256_mul_ps(layer_a, opacity256);
+
+                    __m256 denom = mul_add_ps256(in_a, _mm256_sub_ps(one256, layer_opacity),
+                                                 layer_opacity);
+                    __m256 mask = _mm256_cmp_ps(denom, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
+
+                    __m256 layer_r_opacity = _mm256_mul_ps(layer_r, layer_opacity);
+                    __m256 layer_g_opacity = _mm256_mul_ps(layer_g, layer_opacity);
+                    __m256 layer_b_opacity = _mm256_mul_ps(layer_b, layer_opacity);
+                    __m256 inv_layer_opacity = _mm256_sub_ps(one256, layer_opacity);
+                    __m256 in_a_scaled = _mm256_mul_ps(in_a, inv_layer_opacity);
+                    __m256 num_r = mul_add_ps256(in_r, in_a_scaled, layer_r_opacity);
+                    __m256 num_g = mul_add_ps256(in_g, in_a_scaled, layer_g_opacity);
+                    __m256 num_b = mul_add_ps256(in_b, in_a_scaled, layer_b_opacity);
+
+                    __m256 out_r = _mm256_div_ps(num_r, denom);
+                    __m256 out_g = _mm256_div_ps(num_g, denom);
+                    __m256 out_b = _mm256_div_ps(num_b, denom);
+                    out_r = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_r, mask);
+                    out_g = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_g, mask);
+                    out_b = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_b, mask);
+
+                    __m256 out_a = mul_add_ps256(in_a, _mm256_sub_ps(one256, layer_opacity),
+                                                 layer_opacity);
+
+                    if (output.channels == 4) {
+                        store_rgba8_u8(&output, index, out_r, out_g, out_b, out_a);
+                    } else {
+                        store_rgb8(&output, index, out_r, out_g, out_b);
+                        store_alpha8(&output, index, out_a);
+                    }
+                }
             } else {
-                _mm_prefetch((const char *)(foreground.f32 + (prefetch_index * foreground.channels)),
-                             _MM_HINT_T0);
+                for (; index + 7 < pixels; index += 8) {
+                    npy_intp prefetch_index = index + prefetch_distance;
+                    _mm_prefetch((const char *)(background.u8 + (prefetch_index * background.channels)),
+                                 _MM_HINT_T0);
+                    _mm_prefetch((const char *)(foreground.f32 + (prefetch_index * foreground.channels)),
+                                 _MM_HINT_T0);
+
+                    __m256 in_r, in_g, in_b, in_a;
+                    __m256 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba8_u8_to_unit_f32_avx2(
+                            background.u8 + (index * background.channels),
+                            inv255256,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb8_u8(background.u8, background.channels, index, &in_r, &in_g, &in_b);
+                        in_a = _mm256_set1_ps(1.0f);
+                    }
+
+                    if (foreground.channels == 4) {
+                        load_rgba8_f32_to_unit_f32_avx2(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb8_f32_to_unit_f32_avx2(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b
+                        );
+                        layer_a = _mm256_set1_ps(1.0f);
+                    }
+                    __m256 layer_opacity = _mm256_mul_ps(layer_a, opacity256);
+
+                    __m256 denom = mul_add_ps256(in_a, _mm256_sub_ps(one256, layer_opacity),
+                                                 layer_opacity);
+                    __m256 mask = _mm256_cmp_ps(denom, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
+
+                    __m256 layer_r_opacity = _mm256_mul_ps(layer_r, layer_opacity);
+                    __m256 layer_g_opacity = _mm256_mul_ps(layer_g, layer_opacity);
+                    __m256 layer_b_opacity = _mm256_mul_ps(layer_b, layer_opacity);
+                    __m256 inv_layer_opacity = _mm256_sub_ps(one256, layer_opacity);
+                    __m256 in_a_scaled = _mm256_mul_ps(in_a, inv_layer_opacity);
+                    __m256 num_r = mul_add_ps256(in_r, in_a_scaled, layer_r_opacity);
+                    __m256 num_g = mul_add_ps256(in_g, in_a_scaled, layer_g_opacity);
+                    __m256 num_b = mul_add_ps256(in_b, in_a_scaled, layer_b_opacity);
+
+                    __m256 out_r = _mm256_div_ps(num_r, denom);
+                    __m256 out_g = _mm256_div_ps(num_g, denom);
+                    __m256 out_b = _mm256_div_ps(num_b, denom);
+                    out_r = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_r, mask);
+                    out_g = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_g, mask);
+                    out_b = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_b, mask);
+
+                    __m256 out_a = mul_add_ps256(in_a, _mm256_sub_ps(one256, layer_opacity),
+                                                 layer_opacity);
+
+                    if (output.channels == 4) {
+                        store_rgba8_u8(&output, index, out_r, out_g, out_b, out_a);
+                    } else {
+                        store_rgb8(&output, index, out_r, out_g, out_b);
+                        store_alpha8(&output, index, out_a);
+                    }
+                }
             }
-            __m256 in_r, in_g, in_b, in_a;
-            __m256 layer_r, layer_g, layer_b, layer_a;
-            if (background.is_uint8 && background.channels == 4) {
-                load_rgba8_u8_to_unit_f32_avx2(
-                    background.u8 + (index * background.channels),
-                    inv255256,
-                    &in_r,
-                    &in_g,
-                    &in_b,
-                    &in_a
-                );
-            } else if (!background.is_uint8 && background.channels == 4) {
-                load_rgba8_f32_to_unit_f32_avx2(
-                    background.f32 + (index * background.channels),
-                    inv255128,
-                    &in_r,
-                    &in_g,
-                    &in_b,
-                    &in_a
-                );
-            } else if (!background.is_uint8 && background.channels == 3) {
-                load_rgb8_f32_to_unit_f32_avx2(
-                    background.f32 + (index * background.channels),
-                    inv255128,
-                    &in_r,
-                    &in_g,
-                    &in_b
-                );
-                in_a = _mm256_set1_ps(1.0f);
+        } else {
+            if (foreground.is_uint8) {
+                for (; index + 7 < pixels; index += 8) {
+                    npy_intp prefetch_index = index + prefetch_distance;
+                    _mm_prefetch((const char *)(background.f32 + (prefetch_index * background.channels)),
+                                 _MM_HINT_T0);
+                    _mm_prefetch((const char *)(foreground.u8 + (prefetch_index * foreground.channels)),
+                                 _MM_HINT_T0);
+
+                    __m256 in_r, in_g, in_b, in_a;
+                    __m256 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba8_f32_to_unit_f32_avx2(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb8_f32_to_unit_f32_avx2(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b
+                        );
+                        in_a = _mm256_set1_ps(1.0f);
+                    }
+
+                    if (foreground.channels == 4) {
+                        load_rgba8_u8_to_unit_f32_avx2(
+                            foreground.u8 + (index * foreground.channels),
+                            inv255256,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb8_u8(foreground.u8, foreground.channels, index,
+                                     &layer_r, &layer_g, &layer_b);
+                        layer_a = _mm256_set1_ps(1.0f);
+                    }
+                    __m256 layer_opacity = _mm256_mul_ps(layer_a, opacity256);
+
+                    __m256 denom = mul_add_ps256(in_a, _mm256_sub_ps(one256, layer_opacity),
+                                                 layer_opacity);
+                    __m256 mask = _mm256_cmp_ps(denom, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
+
+                    __m256 layer_r_opacity = _mm256_mul_ps(layer_r, layer_opacity);
+                    __m256 layer_g_opacity = _mm256_mul_ps(layer_g, layer_opacity);
+                    __m256 layer_b_opacity = _mm256_mul_ps(layer_b, layer_opacity);
+                    __m256 inv_layer_opacity = _mm256_sub_ps(one256, layer_opacity);
+                    __m256 in_a_scaled = _mm256_mul_ps(in_a, inv_layer_opacity);
+                    __m256 num_r = mul_add_ps256(in_r, in_a_scaled, layer_r_opacity);
+                    __m256 num_g = mul_add_ps256(in_g, in_a_scaled, layer_g_opacity);
+                    __m256 num_b = mul_add_ps256(in_b, in_a_scaled, layer_b_opacity);
+
+                    __m256 out_r = _mm256_div_ps(num_r, denom);
+                    __m256 out_g = _mm256_div_ps(num_g, denom);
+                    __m256 out_b = _mm256_div_ps(num_b, denom);
+                    out_r = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_r, mask);
+                    out_g = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_g, mask);
+                    out_b = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_b, mask);
+
+                    __m256 out_a = mul_add_ps256(in_a, _mm256_sub_ps(one256, layer_opacity),
+                                                 layer_opacity);
+
+                    if (output.channels == 4) {
+                        store_rgba8_f32_from_unit_avx2(
+                            output.f32 + (index * output.channels),
+                            out_r,
+                            out_g,
+                            out_b,
+                            out_a
+                        );
+                    } else {
+                        store_rgb8(&output, index, out_r, out_g, out_b);
+                        store_alpha8(&output, index, out_a);
+                    }
+                }
             } else {
-                load_rgb8(&background, index, &in_r, &in_g, &in_b);
-                in_a = load_alpha8(&background, index);
-            }
+                for (; index + 7 < pixels; index += 8) {
+                    npy_intp prefetch_index = index + prefetch_distance;
+                    _mm_prefetch((const char *)(background.f32 + (prefetch_index * background.channels)),
+                                 _MM_HINT_T0);
+                    _mm_prefetch((const char *)(foreground.f32 + (prefetch_index * foreground.channels)),
+                                 _MM_HINT_T0);
 
-            if (foreground.is_uint8 && foreground.channels == 4) {
-                load_rgba8_u8_to_unit_f32_avx2(
-                    foreground.u8 + (index * foreground.channels),
-                    inv255256,
-                    &layer_r,
-                    &layer_g,
-                    &layer_b,
-                    &layer_a
-                );
-            } else if (!foreground.is_uint8 && foreground.channels == 4) {
-                load_rgba8_f32_to_unit_f32_avx2(
-                    foreground.f32 + (index * foreground.channels),
-                    inv255128,
-                    &layer_r,
-                    &layer_g,
-                    &layer_b,
-                    &layer_a
-                );
-            } else if (!foreground.is_uint8 && foreground.channels == 3) {
-                load_rgb8_f32_to_unit_f32_avx2(
-                    foreground.f32 + (index * foreground.channels),
-                    inv255128,
-                    &layer_r,
-                    &layer_g,
-                    &layer_b
-                );
-                layer_a = _mm256_set1_ps(1.0f);
-            } else {
-                load_rgb8(&foreground, index, &layer_r, &layer_g, &layer_b);
-                layer_a = load_alpha8(&foreground, index);
-            }
-            __m256 layer_opacity = _mm256_mul_ps(layer_a, opacity256);
+                    __m256 in_r, in_g, in_b, in_a;
+                    __m256 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba8_f32_to_unit_f32_avx2(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb8_f32_to_unit_f32_avx2(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b
+                        );
+                        in_a = _mm256_set1_ps(1.0f);
+                    }
 
-            __m256 denom = mul_add_ps256(in_a, _mm256_sub_ps(one256, layer_opacity), layer_opacity);
-            __m256 mask = _mm256_cmp_ps(denom, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
+                    if (foreground.channels == 4) {
+                        load_rgba8_f32_to_unit_f32_avx2(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb8_f32_to_unit_f32_avx2(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b
+                        );
+                        layer_a = _mm256_set1_ps(1.0f);
+                    }
+                    __m256 layer_opacity = _mm256_mul_ps(layer_a, opacity256);
 
-            __m256 layer_r_opacity = _mm256_mul_ps(layer_r, layer_opacity);
-            __m256 layer_g_opacity = _mm256_mul_ps(layer_g, layer_opacity);
-            __m256 layer_b_opacity = _mm256_mul_ps(layer_b, layer_opacity);
-            __m256 inv_layer_opacity = _mm256_sub_ps(one256, layer_opacity);
-            __m256 in_a_scaled = _mm256_mul_ps(in_a, inv_layer_opacity);
-            __m256 num_r = mul_add_ps256(in_r, in_a_scaled, layer_r_opacity);
-            __m256 num_g = mul_add_ps256(in_g, in_a_scaled, layer_g_opacity);
-            __m256 num_b = mul_add_ps256(in_b, in_a_scaled, layer_b_opacity);
+                    __m256 denom = mul_add_ps256(in_a, _mm256_sub_ps(one256, layer_opacity),
+                                                 layer_opacity);
+                    __m256 mask = _mm256_cmp_ps(denom, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
 
-            __m256 out_r = _mm256_div_ps(num_r, denom);
-            __m256 out_g = _mm256_div_ps(num_g, denom);
-            __m256 out_b = _mm256_div_ps(num_b, denom);
-            out_r = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_r, mask);
-            out_g = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_g, mask);
-            out_b = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_b, mask);
+                    __m256 layer_r_opacity = _mm256_mul_ps(layer_r, layer_opacity);
+                    __m256 layer_g_opacity = _mm256_mul_ps(layer_g, layer_opacity);
+                    __m256 layer_b_opacity = _mm256_mul_ps(layer_b, layer_opacity);
+                    __m256 inv_layer_opacity = _mm256_sub_ps(one256, layer_opacity);
+                    __m256 in_a_scaled = _mm256_mul_ps(in_a, inv_layer_opacity);
+                    __m256 num_r = mul_add_ps256(in_r, in_a_scaled, layer_r_opacity);
+                    __m256 num_g = mul_add_ps256(in_g, in_a_scaled, layer_g_opacity);
+                    __m256 num_b = mul_add_ps256(in_b, in_a_scaled, layer_b_opacity);
 
-            __m256 out_a = mul_add_ps256(in_a, _mm256_sub_ps(one256, layer_opacity), layer_opacity);
+                    __m256 out_r = _mm256_div_ps(num_r, denom);
+                    __m256 out_g = _mm256_div_ps(num_g, denom);
+                    __m256 out_b = _mm256_div_ps(num_b, denom);
+                    out_r = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_r, mask);
+                    out_g = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_g, mask);
+                    out_b = _mm256_blendv_ps(_mm256_set1_ps(0.0f), out_b, mask);
 
-            if (output.is_uint8 && output.channels == 4) {
-                store_rgba8_u8(&output, index, out_r, out_g, out_b, out_a);
-            } else if (!output.is_uint8 && output.channels == 4) {
-                store_rgba8_f32_from_unit_avx2(
-                    output.f32 + (index * output.channels),
-                    out_r,
-                    out_g,
-                    out_b,
-                    out_a
-                );
-            } else {
-                store_rgb8(&output, index, out_r, out_g, out_b);
-                store_alpha8(&output, index, out_a);
+                    __m256 out_a = mul_add_ps256(in_a, _mm256_sub_ps(one256, layer_opacity),
+                                                 layer_opacity);
+
+                    if (output.channels == 4) {
+                        store_rgba8_f32_from_unit_avx2(
+                            output.f32 + (index * output.channels),
+                            out_r,
+                            out_g,
+                            out_b,
+                            out_a
+                        );
+                    } else {
+                        store_rgb8(&output, index, out_r, out_g, out_b);
+                        store_alpha8(&output, index, out_a);
+                    }
+                }
             }
         }
     }
@@ -1367,143 +2299,442 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
 
 #if defined(__SSE4_1__)
     if (kernel == KERNEL_SSE42 || kernel == KERNEL_AVX2) {
-        for (; index + 3 < pixels; index += 4) {
-            __m128 in_r, in_g, in_b, in_a;
-            __m128 layer_r, layer_g, layer_b, layer_a;
-            if (background.is_uint8 && background.channels == 4) {
-                load_rgba4_u8_to_unit_f32_sse(
-                    background.u8 + (index * background.channels),
-                    inv255128,
-                    &in_r,
-                    &in_g,
-                    &in_b,
-                    &in_a
-                );
-            } else if (!background.is_uint8 && background.channels == 4) {
-                load_rgba4_f32_to_unit_f32_sse(
-                    background.f32 + (index * background.channels),
-                    inv255128,
-                    &in_r,
-                    &in_g,
-                    &in_b,
-                    &in_a
-                );
-            } else if (!background.is_uint8 && background.channels == 3) {
-                load_rgb4_f32_to_unit_f32_sse(
-                    background.f32 + (index * background.channels),
-                    inv255128,
-                    &in_r,
-                    &in_g,
-                    &in_b
-                );
-                in_a = _mm_set1_ps(1.0f);
+        if (background.is_uint8) {
+            if (foreground.is_uint8) {
+                for (; index + 3 < pixels; index += 4) {
+                    __m128 in_r, in_g, in_b, in_a;
+                    __m128 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba4_u8_to_unit_f32_sse(
+                            background.u8 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb4_u8(background.u8, background.channels, index,
+                                     &in_r, &in_g, &in_b);
+                        in_a = _mm_set1_ps(1.0f);
+                    }
+
+                    if (foreground.channels == 4) {
+                        load_rgba4_u8_to_unit_f32_sse(
+                            foreground.u8 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb4_u8(foreground.u8, foreground.channels, index,
+                                     &layer_r, &layer_g, &layer_b);
+                        layer_a = _mm_set1_ps(1.0f);
+                    }
+                    __m128 layer_opacity = _mm_mul_ps(layer_a, opacity128);
+
+                    __m128 denom = mul_add_ps128(in_a, _mm_sub_ps(one, layer_opacity), layer_opacity);
+                    __m128 mask = _mm_cmpgt_ps(denom, _mm_set1_ps(0.0f));
+
+                    __m128 layer_r_opacity = _mm_mul_ps(layer_r, layer_opacity);
+                    __m128 layer_g_opacity = _mm_mul_ps(layer_g, layer_opacity);
+                    __m128 layer_b_opacity = _mm_mul_ps(layer_b, layer_opacity);
+                    __m128 inv_layer_opacity = _mm_sub_ps(one, layer_opacity);
+                    __m128 in_a_scaled = _mm_mul_ps(in_a, inv_layer_opacity);
+                    __m128 num_r = mul_add_ps128(in_r, in_a_scaled, layer_r_opacity);
+                    __m128 num_g = mul_add_ps128(in_g, in_a_scaled, layer_g_opacity);
+                    __m128 num_b = mul_add_ps128(in_b, in_a_scaled, layer_b_opacity);
+
+                    __m128 out_r = _mm_div_ps(num_r, denom);
+                    __m128 out_g = _mm_div_ps(num_g, denom);
+                    __m128 out_b = _mm_div_ps(num_b, denom);
+                    out_r = _mm_blendv_ps(_mm_set1_ps(0.0f), out_r, mask);
+                    out_g = _mm_blendv_ps(_mm_set1_ps(0.0f), out_g, mask);
+                    out_b = _mm_blendv_ps(_mm_set1_ps(0.0f), out_b, mask);
+
+                    __m128 out_a = mul_add_ps128(in_a, _mm_sub_ps(one, layer_opacity), layer_opacity);
+
+                    if (output.channels == 4) {
+                        store_rgba4_u8(&output, index, out_r, out_g, out_b, out_a);
+                    } else {
+                        store_rgb4(&output, index, out_r, out_g, out_b);
+                        store_alpha4(&output, index, out_a);
+                    }
+                }
             } else {
-                load_rgb4(&background, index, &in_r, &in_g, &in_b);
-                in_a = load_alpha4(&background, index);
+                for (; index + 3 < pixels; index += 4) {
+                    __m128 in_r, in_g, in_b, in_a;
+                    __m128 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba4_u8_to_unit_f32_sse(
+                            background.u8 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb4_u8(background.u8, background.channels, index,
+                                     &in_r, &in_g, &in_b);
+                        in_a = _mm_set1_ps(1.0f);
+                    }
+
+                    if (foreground.channels == 4) {
+                        load_rgba4_f32_to_unit_f32_sse(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb4_f32_to_unit_f32_sse(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b
+                        );
+                        layer_a = _mm_set1_ps(1.0f);
+                    }
+                    __m128 layer_opacity = _mm_mul_ps(layer_a, opacity128);
+
+                    __m128 denom = mul_add_ps128(in_a, _mm_sub_ps(one, layer_opacity), layer_opacity);
+                    __m128 mask = _mm_cmpgt_ps(denom, _mm_set1_ps(0.0f));
+
+                    __m128 layer_r_opacity = _mm_mul_ps(layer_r, layer_opacity);
+                    __m128 layer_g_opacity = _mm_mul_ps(layer_g, layer_opacity);
+                    __m128 layer_b_opacity = _mm_mul_ps(layer_b, layer_opacity);
+                    __m128 inv_layer_opacity = _mm_sub_ps(one, layer_opacity);
+                    __m128 in_a_scaled = _mm_mul_ps(in_a, inv_layer_opacity);
+                    __m128 num_r = mul_add_ps128(in_r, in_a_scaled, layer_r_opacity);
+                    __m128 num_g = mul_add_ps128(in_g, in_a_scaled, layer_g_opacity);
+                    __m128 num_b = mul_add_ps128(in_b, in_a_scaled, layer_b_opacity);
+
+                    __m128 out_r = _mm_div_ps(num_r, denom);
+                    __m128 out_g = _mm_div_ps(num_g, denom);
+                    __m128 out_b = _mm_div_ps(num_b, denom);
+                    out_r = _mm_blendv_ps(_mm_set1_ps(0.0f), out_r, mask);
+                    out_g = _mm_blendv_ps(_mm_set1_ps(0.0f), out_g, mask);
+                    out_b = _mm_blendv_ps(_mm_set1_ps(0.0f), out_b, mask);
+
+                    __m128 out_a = mul_add_ps128(in_a, _mm_sub_ps(one, layer_opacity), layer_opacity);
+
+                    if (output.channels == 4) {
+                        store_rgba4_u8(&output, index, out_r, out_g, out_b, out_a);
+                    } else {
+                        store_rgb4(&output, index, out_r, out_g, out_b);
+                        store_alpha4(&output, index, out_a);
+                    }
+                }
             }
+        } else {
+            if (foreground.is_uint8) {
+                for (; index + 3 < pixels; index += 4) {
+                    __m128 in_r, in_g, in_b, in_a;
+                    __m128 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba4_f32_to_unit_f32_sse(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb4_f32_to_unit_f32_sse(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b
+                        );
+                        in_a = _mm_set1_ps(1.0f);
+                    }
 
-            if (foreground.is_uint8 && foreground.channels == 4) {
-                load_rgba4_u8_to_unit_f32_sse(
-                    foreground.u8 + (index * foreground.channels),
-                    inv255128,
-                    &layer_r,
-                    &layer_g,
-                    &layer_b,
-                    &layer_a
-                );
-            } else if (!foreground.is_uint8 && foreground.channels == 4) {
-                load_rgba4_f32_to_unit_f32_sse(
-                    foreground.f32 + (index * foreground.channels),
-                    inv255128,
-                    &layer_r,
-                    &layer_g,
-                    &layer_b,
-                    &layer_a
-                );
-            } else if (!foreground.is_uint8 && foreground.channels == 3) {
-                load_rgb4_f32_to_unit_f32_sse(
-                    foreground.f32 + (index * foreground.channels),
-                    inv255128,
-                    &layer_r,
-                    &layer_g,
-                    &layer_b
-                );
-                layer_a = _mm_set1_ps(1.0f);
+                    if (foreground.channels == 4) {
+                        load_rgba4_u8_to_unit_f32_sse(
+                            foreground.u8 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb4_u8(foreground.u8, foreground.channels, index,
+                                     &layer_r, &layer_g, &layer_b);
+                        layer_a = _mm_set1_ps(1.0f);
+                    }
+                    __m128 layer_opacity = _mm_mul_ps(layer_a, opacity128);
+
+                    __m128 denom = mul_add_ps128(in_a, _mm_sub_ps(one, layer_opacity), layer_opacity);
+                    __m128 mask = _mm_cmpgt_ps(denom, _mm_set1_ps(0.0f));
+
+                    __m128 layer_r_opacity = _mm_mul_ps(layer_r, layer_opacity);
+                    __m128 layer_g_opacity = _mm_mul_ps(layer_g, layer_opacity);
+                    __m128 layer_b_opacity = _mm_mul_ps(layer_b, layer_opacity);
+                    __m128 inv_layer_opacity = _mm_sub_ps(one, layer_opacity);
+                    __m128 in_a_scaled = _mm_mul_ps(in_a, inv_layer_opacity);
+                    __m128 num_r = mul_add_ps128(in_r, in_a_scaled, layer_r_opacity);
+                    __m128 num_g = mul_add_ps128(in_g, in_a_scaled, layer_g_opacity);
+                    __m128 num_b = mul_add_ps128(in_b, in_a_scaled, layer_b_opacity);
+
+                    __m128 out_r = _mm_div_ps(num_r, denom);
+                    __m128 out_g = _mm_div_ps(num_g, denom);
+                    __m128 out_b = _mm_div_ps(num_b, denom);
+                    out_r = _mm_blendv_ps(_mm_set1_ps(0.0f), out_r, mask);
+                    out_g = _mm_blendv_ps(_mm_set1_ps(0.0f), out_g, mask);
+                    out_b = _mm_blendv_ps(_mm_set1_ps(0.0f), out_b, mask);
+
+                    __m128 out_a = mul_add_ps128(in_a, _mm_sub_ps(one, layer_opacity), layer_opacity);
+
+                    if (output.channels == 4) {
+                        store_rgba4_f32_from_unit_sse(
+                            output.f32 + (index * output.channels),
+                            out_r,
+                            out_g,
+                            out_b,
+                            out_a
+                        );
+                    } else {
+                        store_rgb4(&output, index, out_r, out_g, out_b);
+                        store_alpha4(&output, index, out_a);
+                    }
+                }
             } else {
-                load_rgb4(&foreground, index, &layer_r, &layer_g, &layer_b);
-                layer_a = load_alpha4(&foreground, index);
-            }
-            __m128 layer_opacity = _mm_mul_ps(layer_a, opacity128);
+                for (; index + 3 < pixels; index += 4) {
+                    __m128 in_r, in_g, in_b, in_a;
+                    __m128 layer_r, layer_g, layer_b, layer_a;
+                    if (background.channels == 4) {
+                        load_rgba4_f32_to_unit_f32_sse(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b,
+                            &in_a
+                        );
+                    } else {
+                        load_rgb4_f32_to_unit_f32_sse(
+                            background.f32 + (index * background.channels),
+                            inv255128,
+                            &in_r,
+                            &in_g,
+                            &in_b
+                        );
+                        in_a = _mm_set1_ps(1.0f);
+                    }
 
-            __m128 denom = mul_add_ps128(in_a, _mm_sub_ps(one, layer_opacity), layer_opacity);
-            __m128 mask = _mm_cmpgt_ps(denom, _mm_set1_ps(0.0f));
+                    if (foreground.channels == 4) {
+                        load_rgba4_f32_to_unit_f32_sse(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b,
+                            &layer_a
+                        );
+                    } else {
+                        load_rgb4_f32_to_unit_f32_sse(
+                            foreground.f32 + (index * foreground.channels),
+                            inv255128,
+                            &layer_r,
+                            &layer_g,
+                            &layer_b
+                        );
+                        layer_a = _mm_set1_ps(1.0f);
+                    }
+                    __m128 layer_opacity = _mm_mul_ps(layer_a, opacity128);
 
-            __m128 layer_r_opacity = _mm_mul_ps(layer_r, layer_opacity);
-            __m128 layer_g_opacity = _mm_mul_ps(layer_g, layer_opacity);
-            __m128 layer_b_opacity = _mm_mul_ps(layer_b, layer_opacity);
-            __m128 inv_layer_opacity = _mm_sub_ps(one, layer_opacity);
-            __m128 in_a_scaled = _mm_mul_ps(in_a, inv_layer_opacity);
-            __m128 num_r = mul_add_ps128(in_r, in_a_scaled, layer_r_opacity);
-            __m128 num_g = mul_add_ps128(in_g, in_a_scaled, layer_g_opacity);
-            __m128 num_b = mul_add_ps128(in_b, in_a_scaled, layer_b_opacity);
+                    __m128 denom = mul_add_ps128(in_a, _mm_sub_ps(one, layer_opacity), layer_opacity);
+                    __m128 mask = _mm_cmpgt_ps(denom, _mm_set1_ps(0.0f));
 
-            __m128 out_r = _mm_div_ps(num_r, denom);
-            __m128 out_g = _mm_div_ps(num_g, denom);
-            __m128 out_b = _mm_div_ps(num_b, denom);
-            out_r = _mm_blendv_ps(_mm_set1_ps(0.0f), out_r, mask);
-            out_g = _mm_blendv_ps(_mm_set1_ps(0.0f), out_g, mask);
-            out_b = _mm_blendv_ps(_mm_set1_ps(0.0f), out_b, mask);
+                    __m128 layer_r_opacity = _mm_mul_ps(layer_r, layer_opacity);
+                    __m128 layer_g_opacity = _mm_mul_ps(layer_g, layer_opacity);
+                    __m128 layer_b_opacity = _mm_mul_ps(layer_b, layer_opacity);
+                    __m128 inv_layer_opacity = _mm_sub_ps(one, layer_opacity);
+                    __m128 in_a_scaled = _mm_mul_ps(in_a, inv_layer_opacity);
+                    __m128 num_r = mul_add_ps128(in_r, in_a_scaled, layer_r_opacity);
+                    __m128 num_g = mul_add_ps128(in_g, in_a_scaled, layer_g_opacity);
+                    __m128 num_b = mul_add_ps128(in_b, in_a_scaled, layer_b_opacity);
 
-            __m128 out_a = mul_add_ps128(in_a, _mm_sub_ps(one, layer_opacity), layer_opacity);
+                    __m128 out_r = _mm_div_ps(num_r, denom);
+                    __m128 out_g = _mm_div_ps(num_g, denom);
+                    __m128 out_b = _mm_div_ps(num_b, denom);
+                    out_r = _mm_blendv_ps(_mm_set1_ps(0.0f), out_r, mask);
+                    out_g = _mm_blendv_ps(_mm_set1_ps(0.0f), out_g, mask);
+                    out_b = _mm_blendv_ps(_mm_set1_ps(0.0f), out_b, mask);
 
-            if (output.is_uint8 && output.channels == 4) {
-                store_rgba4_u8(&output, index, out_r, out_g, out_b, out_a);
-            } else if (!output.is_uint8 && output.channels == 4) {
-                store_rgba4_f32_from_unit_sse(
-                    output.f32 + (index * output.channels),
-                    out_r,
-                    out_g,
-                    out_b,
-                    out_a
-                );
-            } else {
-                store_rgb4(&output, index, out_r, out_g, out_b);
-                store_alpha4(&output, index, out_a);
+                    __m128 out_a = mul_add_ps128(in_a, _mm_sub_ps(one, layer_opacity), layer_opacity);
+
+                    if (output.channels == 4) {
+                        store_rgba4_f32_from_unit_sse(
+                            output.f32 + (index * output.channels),
+                            out_r,
+                            out_g,
+                            out_b,
+                            out_a
+                        );
+                    } else {
+                        store_rgb4(&output, index, out_r, out_g, out_b);
+                        store_alpha4(&output, index, out_a);
+                    }
+                }
             }
         }
     }
 #endif
 #endif
 
-    for (; index < pixels; ++index) {
-        npy_intp bg_offset = index * background.channels;
-        npy_intp fg_offset = index * foreground.channels;
+    if (background.is_uint8) {
+        const uint8_t *bg = background.u8;
+        uint8_t *out = output.u8;
+        if (foreground.is_uint8) {
+            const uint8_t *fg = foreground.u8;
+            for (; index < pixels; ++index) {
+                npy_intp bg_offset = index * background.channels;
+                npy_intp fg_offset = index * foreground.channels;
 
-        float in_a = 1.0f;
-        float layer_a = 1.0f;
+                float in_a = 1.0f;
+                float layer_a = 1.0f;
 
-        if (background.channels == 4) {
-            in_a = read_channel(&background, bg_offset + 3);
-        }
-        if (foreground.channels == 4) {
-            layer_a = read_channel(&foreground, fg_offset + 3);
-        }
+                if (background.channels == 4) {
+                    in_a = read_channel_u8(bg, bg_offset + 3);
+                }
+                if (foreground.channels == 4) {
+                    layer_a = read_channel_u8(fg, fg_offset + 3);
+                }
 
-        float layer_opacity = layer_a * opacity;
-        float denom = layer_opacity + in_a * (1.0f - layer_opacity);
-        for (int c = 0; c < 3; ++c) {
-            float in_c = read_channel(&background, bg_offset + c);
-            float layer_c = read_channel(&foreground, fg_offset + c);
-            float out_c = 0.0f;
-            if (denom > 0.0f) {
-                out_c = (layer_c * layer_opacity + in_c * in_a * (1.0f - layer_opacity)) / denom;
+                float layer_opacity = layer_a * opacity;
+                float denom = layer_opacity + in_a * (1.0f - layer_opacity);
+                for (int c = 0; c < 3; ++c) {
+                    float in_c = read_channel_u8(bg, bg_offset + c);
+                    float layer_c = read_channel_u8(fg, fg_offset + c);
+                    float out_c = 0.0f;
+                    if (denom > 0.0f) {
+                        out_c = (layer_c * layer_opacity +
+                                 in_c * in_a * (1.0f - layer_opacity)) / denom;
+                    }
+                    write_channel_u8(out, bg_offset + c, out_c);
+                }
+
+                if (background.channels == 4) {
+                    float out_a = layer_opacity + in_a * (1.0f - layer_opacity);
+                    write_channel_u8(out, bg_offset + 3, out_a);
+                }
             }
-            write_channel(&output, bg_offset + c, out_c);
-        }
+        } else {
+            const float *fg = foreground.f32;
+            for (; index < pixels; ++index) {
+                npy_intp bg_offset = index * background.channels;
+                npy_intp fg_offset = index * foreground.channels;
 
-        if (background.channels == 4) {
-            float out_a = layer_opacity + in_a * (1.0f - layer_opacity);
-            write_channel(&output, bg_offset + 3, out_a);
+                float in_a = 1.0f;
+                float layer_a = 1.0f;
+
+                if (background.channels == 4) {
+                    in_a = read_channel_u8(bg, bg_offset + 3);
+                }
+                if (foreground.channels == 4) {
+                    layer_a = read_channel_f32(fg, fg_offset + 3);
+                }
+
+                float layer_opacity = layer_a * opacity;
+                float denom = layer_opacity + in_a * (1.0f - layer_opacity);
+                for (int c = 0; c < 3; ++c) {
+                    float in_c = read_channel_u8(bg, bg_offset + c);
+                    float layer_c = read_channel_f32(fg, fg_offset + c);
+                    float out_c = 0.0f;
+                    if (denom > 0.0f) {
+                        out_c = (layer_c * layer_opacity +
+                                 in_c * in_a * (1.0f - layer_opacity)) / denom;
+                    }
+                    write_channel_u8(out, bg_offset + c, out_c);
+                }
+
+                if (background.channels == 4) {
+                    float out_a = layer_opacity + in_a * (1.0f - layer_opacity);
+                    write_channel_u8(out, bg_offset + 3, out_a);
+                }
+            }
+        }
+    } else {
+        const float *bg = background.f32;
+        float *out = output.f32;
+        if (foreground.is_uint8) {
+            const uint8_t *fg = foreground.u8;
+            for (; index < pixels; ++index) {
+                npy_intp bg_offset = index * background.channels;
+                npy_intp fg_offset = index * foreground.channels;
+
+                float in_a = 1.0f;
+                float layer_a = 1.0f;
+
+                if (background.channels == 4) {
+                    in_a = read_channel_f32(bg, bg_offset + 3);
+                }
+                if (foreground.channels == 4) {
+                    layer_a = read_channel_u8(fg, fg_offset + 3);
+                }
+
+                float layer_opacity = layer_a * opacity;
+                float denom = layer_opacity + in_a * (1.0f - layer_opacity);
+                for (int c = 0; c < 3; ++c) {
+                    float in_c = read_channel_f32(bg, bg_offset + c);
+                    float layer_c = read_channel_u8(fg, fg_offset + c);
+                    float out_c = 0.0f;
+                    if (denom > 0.0f) {
+                        out_c = (layer_c * layer_opacity +
+                                 in_c * in_a * (1.0f - layer_opacity)) / denom;
+                    }
+                    write_channel_f32(out, bg_offset + c, out_c);
+                }
+
+                if (background.channels == 4) {
+                    float out_a = layer_opacity + in_a * (1.0f - layer_opacity);
+                    write_channel_f32(out, bg_offset + 3, out_a);
+                }
+            }
+        } else {
+            const float *fg = foreground.f32;
+            for (; index < pixels; ++index) {
+                npy_intp bg_offset = index * background.channels;
+                npy_intp fg_offset = index * foreground.channels;
+
+                float in_a = 1.0f;
+                float layer_a = 1.0f;
+
+                if (background.channels == 4) {
+                    in_a = read_channel_f32(bg, bg_offset + 3);
+                }
+                if (foreground.channels == 4) {
+                    layer_a = read_channel_f32(fg, fg_offset + 3);
+                }
+
+                float layer_opacity = layer_a * opacity;
+                float denom = layer_opacity + in_a * (1.0f - layer_opacity);
+                for (int c = 0; c < 3; ++c) {
+                    float in_c = read_channel_f32(bg, bg_offset + c);
+                    float layer_c = read_channel_f32(fg, fg_offset + c);
+                    float out_c = 0.0f;
+                    if (denom > 0.0f) {
+                        out_c = (layer_c * layer_opacity +
+                                 in_c * in_a * (1.0f - layer_opacity)) / denom;
+                    }
+                    write_channel_f32(out, bg_offset + c, out_c);
+                }
+
+                if (background.channels == 4) {
+                    float out_a = layer_opacity + in_a * (1.0f - layer_opacity);
+                    write_channel_f32(out, bg_offset + 3, out_a);
+                }
+            }
         }
     }
     NPY_END_ALLOW_THREADS
