@@ -158,6 +158,59 @@ typedef void *blend_comp_fn256_u8;
 #endif
 
 #if SIMD_BLEND_MODES_X86
+#if defined(_MSC_VER)
+  #define SIMD_BLEND_MODES_ALIGN16 __declspec(align(16))
+#else
+  #define SIMD_BLEND_MODES_ALIGN16 __attribute__((aligned(16)))
+#endif
+
+static const SIMD_BLEND_MODES_ALIGN16 uint8_t k_mask_rgba_r[16] = {
+    0, 4, 8, 12, 0x80, 0x80, 0x80, 0x80,
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80
+};
+static const SIMD_BLEND_MODES_ALIGN16 uint8_t k_mask_rgba_g[16] = {
+    1, 5, 9, 13, 0x80, 0x80, 0x80, 0x80,
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80
+};
+static const SIMD_BLEND_MODES_ALIGN16 uint8_t k_mask_rgba_b[16] = {
+    2, 6, 10, 14, 0x80, 0x80, 0x80, 0x80,
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80
+};
+static const SIMD_BLEND_MODES_ALIGN16 uint8_t k_mask_rgba_a[16] = {
+    3, 7, 11, 15, 0x80, 0x80, 0x80, 0x80,
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80
+};
+static const SIMD_BLEND_MODES_ALIGN16 uint8_t k_mask_rgb_r[16] = {
+    0, 3, 6, 9, 0x80, 0x80, 0x80, 0x80,
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80
+};
+static const SIMD_BLEND_MODES_ALIGN16 uint8_t k_mask_rgb_g[16] = {
+    1, 4, 7, 10, 0x80, 0x80, 0x80, 0x80,
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80
+};
+static const SIMD_BLEND_MODES_ALIGN16 uint8_t k_mask_rgb_b[16] = {
+    2, 5, 8, 11, 0x80, 0x80, 0x80, 0x80,
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80
+};
+static const SIMD_BLEND_MODES_ALIGN16 uint8_t k_mask_pack_rgb_r[16] = {
+    0, 0x80, 0x80, 1,
+    0x80, 0x80, 2, 0x80,
+    0x80, 3, 0x80, 0x80,
+    0x80, 0x80, 0x80, 0x80
+};
+static const SIMD_BLEND_MODES_ALIGN16 uint8_t k_mask_pack_rgb_g[16] = {
+    0x80, 0, 0x80, 0x80,
+    1, 0x80, 0x80, 2,
+    0x80, 0x80, 3, 0x80,
+    0x80, 0x80, 0x80, 0x80
+};
+static const SIMD_BLEND_MODES_ALIGN16 uint8_t k_mask_pack_rgb_b[16] = {
+    0x80, 0x80, 0, 0x80,
+    0x80, 1, 0x80, 0x80,
+    2, 0x80, 0x80, 3,
+    0x80, 0x80, 0x80, 0x80
+};
+
 static inline __m256 mul_add_ps256(__m256 a, __m256 b, __m256 c) {
 #ifdef __FMA__
     return _mm256_fmadd_ps(a, b, c);
@@ -196,22 +249,10 @@ static inline void load_rgba8_u8_to_u32_avx2(const uint8_t *p,
     __m128i lo = _mm256_castsi256_si128(pixels);
     __m128i hi = _mm256_extracti128_si256(pixels, 1);
 
-    const __m128i mask_r = _mm_setr_epi8(
-        0, 4, 8, 12, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
-    const __m128i mask_g = _mm_setr_epi8(
-        1, 5, 9, 13, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
-    const __m128i mask_b = _mm_setr_epi8(
-        2, 6, 10, 14, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
-    const __m128i mask_a = _mm_setr_epi8(
-        3, 7, 11, 15, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
+    const __m128i mask_r = _mm_load_si128((const __m128i *)k_mask_rgba_r);
+    const __m128i mask_g = _mm_load_si128((const __m128i *)k_mask_rgba_g);
+    const __m128i mask_b = _mm_load_si128((const __m128i *)k_mask_rgba_b);
+    const __m128i mask_a = _mm_load_si128((const __m128i *)k_mask_rgba_a);
 
     __m128i r_lo = _mm_shuffle_epi8(lo, mask_r);
     __m128i r_hi = _mm_shuffle_epi8(hi, mask_r);
@@ -267,22 +308,10 @@ static inline void load_rgba8_u8_to_unit_f32_avx2(const uint8_t *p, __m256 inv25
     __m128i lo = _mm256_castsi256_si128(pixels);
     __m128i hi = _mm256_extracti128_si256(pixels, 1);
 
-    const __m128i mask_r = _mm_setr_epi8(
-        0, 4, 8, 12, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
-    const __m128i mask_g = _mm_setr_epi8(
-        1, 5, 9, 13, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
-    const __m128i mask_b = _mm_setr_epi8(
-        2, 6, 10, 14, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
-    const __m128i mask_a = _mm_setr_epi8(
-        3, 7, 11, 15, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
+    const __m128i mask_r = _mm_load_si128((const __m128i *)k_mask_rgba_r);
+    const __m128i mask_g = _mm_load_si128((const __m128i *)k_mask_rgba_g);
+    const __m128i mask_b = _mm_load_si128((const __m128i *)k_mask_rgba_b);
+    const __m128i mask_a = _mm_load_si128((const __m128i *)k_mask_rgba_a);
 
     __m128 r0 = _mm_cvtepi32_ps(_mm_cvtepu8_epi32(_mm_shuffle_epi8(lo, mask_r)));
     __m128 r1 = _mm_cvtepi32_ps(_mm_cvtepu8_epi32(_mm_shuffle_epi8(hi, mask_r)));
@@ -332,21 +361,9 @@ static inline __m128i pack_unit_f32_to_u8_rgb4(__m128 fr, __m128 fg, __m128 fb) 
     __m128i ig8 = _mm_packus_epi16(ig16, zero);
     __m128i ib8 = _mm_packus_epi16(ib16, zero);
 
-    const __m128i mask_r = _mm_setr_epi8(
-        0, (char)0x80, (char)0x80, 1,
-        (char)0x80, (char)0x80, 2, (char)0x80,
-        (char)0x80, 3, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80);
-    const __m128i mask_g = _mm_setr_epi8(
-        (char)0x80, 0, (char)0x80, (char)0x80,
-        1, (char)0x80, (char)0x80, 2,
-        (char)0x80, (char)0x80, 3, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80);
-    const __m128i mask_b = _mm_setr_epi8(
-        (char)0x80, (char)0x80, 0, (char)0x80,
-        (char)0x80, 1, (char)0x80, (char)0x80,
-        2, (char)0x80, (char)0x80, 3,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80);
+    const __m128i mask_r = _mm_load_si128((const __m128i *)k_mask_pack_rgb_r);
+    const __m128i mask_g = _mm_load_si128((const __m128i *)k_mask_pack_rgb_g);
+    const __m128i mask_b = _mm_load_si128((const __m128i *)k_mask_pack_rgb_b);
 
     __m128i packed = _mm_or_si128(
         _mm_or_si128(_mm_shuffle_epi8(ir8, mask_r),
@@ -548,22 +565,10 @@ static inline void load_rgba4_u8_to_unit_f32_sse(const uint8_t *p, __m128 inv255
                                                  __m128 *r, __m128 *g, __m128 *b,
                                                  __m128 *a) {
     __m128i pixels = _mm_loadu_si128((const __m128i *)p);
-    const __m128i mask_r = _mm_setr_epi8(
-        0, 4, 8, 12, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
-    const __m128i mask_g = _mm_setr_epi8(
-        1, 5, 9, 13, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
-    const __m128i mask_b = _mm_setr_epi8(
-        2, 6, 10, 14, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
-    const __m128i mask_a = _mm_setr_epi8(
-        3, 7, 11, 15, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
+    const __m128i mask_r = _mm_load_si128((const __m128i *)k_mask_rgba_r);
+    const __m128i mask_g = _mm_load_si128((const __m128i *)k_mask_rgba_g);
+    const __m128i mask_b = _mm_load_si128((const __m128i *)k_mask_rgba_b);
+    const __m128i mask_a = _mm_load_si128((const __m128i *)k_mask_rgba_a);
 
     __m128i r8 = _mm_shuffle_epi8(pixels, mask_r);
     __m128i g8 = _mm_shuffle_epi8(pixels, mask_g);
@@ -576,26 +581,59 @@ static inline void load_rgba4_u8_to_unit_f32_sse(const uint8_t *p, __m128 inv255
     *a = _mm_mul_ps(_mm_cvtepi32_ps(_mm_cvtepu8_epi32(a8)), inv255);
 }
 
+static inline __m128i load_rgb4_u8_bytes_sse(const uint8_t *p) {
+    __m128i lo = _mm_loadl_epi64((const __m128i*)p);
+    __m128i hi = _mm_cvtsi32_si128(*(const int*)(p + 8));
+    return _mm_unpacklo_epi64(lo, hi);
+}
+
+static inline void load_rgb4_u8_to_unit_f32_sse(const uint8_t *p, __m128 inv255,
+                                                __m128 *r, __m128 *g, __m128 *b) {
+    __m128i pixels = load_rgb4_u8_bytes_sse(p);
+    const __m128i mask_r = _mm_load_si128((const __m128i *)k_mask_rgb_r);
+    const __m128i mask_g = _mm_load_si128((const __m128i *)k_mask_rgb_g);
+    const __m128i mask_b = _mm_load_si128((const __m128i *)k_mask_rgb_b);
+
+    __m128i r8 = _mm_shuffle_epi8(pixels, mask_r);
+    __m128i g8 = _mm_shuffle_epi8(pixels, mask_g);
+    __m128i b8 = _mm_shuffle_epi8(pixels, mask_b);
+
+    *r = _mm_mul_ps(_mm_cvtepi32_ps(_mm_cvtepu8_epi32(r8)), inv255);
+    *g = _mm_mul_ps(_mm_cvtepi32_ps(_mm_cvtepu8_epi32(g8)), inv255);
+    *b = _mm_mul_ps(_mm_cvtepi32_ps(_mm_cvtepu8_epi32(b8)), inv255);
+}
+
+static inline void load_rgb4_u8_to_u32_sse_from_ptr(const uint8_t *p, __m128i *r,
+                                                    __m128i *g, __m128i *b) {
+    __m128i pixels = load_rgb4_u8_bytes_sse(p);
+    const __m128i mask_r = _mm_load_si128((const __m128i *)k_mask_rgb_r);
+    const __m128i mask_g = _mm_load_si128((const __m128i *)k_mask_rgb_g);
+    const __m128i mask_b = _mm_load_si128((const __m128i *)k_mask_rgb_b);
+
+    __m128i r8 = _mm_shuffle_epi8(pixels, mask_r);
+    __m128i g8 = _mm_shuffle_epi8(pixels, mask_g);
+    __m128i b8 = _mm_shuffle_epi8(pixels, mask_b);
+
+    *r = _mm_cvtepu8_epi32(r8);
+    *g = _mm_cvtepu8_epi32(g8);
+    *b = _mm_cvtepu8_epi32(b8);
+}
+
+static inline void load_rgb4_u8_to_u32_sse_with_alpha(const uint8_t *p, __m128i *r,
+                                                      __m128i *g, __m128i *b,
+                                                      __m128i *a) {
+    load_rgb4_u8_to_u32_sse_from_ptr(p, r, g, b);
+    *a = _mm_set1_epi32(255);
+}
+
 static inline void load_rgba4_u8_to_u32_sse(const uint8_t *p,
                                             __m128i *r, __m128i *g,
                                             __m128i *b, __m128i *a) {
     __m128i pixels = _mm_loadu_si128((const __m128i *)p);
-    const __m128i mask_r = _mm_setr_epi8(
-        0, 4, 8, 12, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
-    const __m128i mask_g = _mm_setr_epi8(
-        1, 5, 9, 13, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
-    const __m128i mask_b = _mm_setr_epi8(
-        2, 6, 10, 14, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
-    const __m128i mask_a = _mm_setr_epi8(
-        3, 7, 11, 15, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80, (char)0x80,
-        (char)0x80, (char)0x80);
+    const __m128i mask_r = _mm_load_si128((const __m128i *)k_mask_rgba_r);
+    const __m128i mask_g = _mm_load_si128((const __m128i *)k_mask_rgba_g);
+    const __m128i mask_b = _mm_load_si128((const __m128i *)k_mask_rgba_b);
+    const __m128i mask_a = _mm_load_si128((const __m128i *)k_mask_rgba_a);
 
     __m128i r8 = _mm_shuffle_epi8(pixels, mask_r);
     __m128i g8 = _mm_shuffle_epi8(pixels, mask_g);
@@ -680,6 +718,18 @@ static inline void write_channel(BlendOutput *output, npy_intp index, float valu
 #if SIMD_BLEND_MODES_X86
 static inline void load_rgb4_u8(const uint8_t *data, int channels, npy_intp index,
                                 __m128 *r, __m128 *g, __m128 *b) {
+    if (channels == 3) {
+        const uint8_t *p = data + (index * channels);
+        load_rgb4_u8_to_unit_f32_sse(p, _mm_set1_ps(1.0f / 255.0f), r, g, b);
+        return;
+    }
+    if (channels == 4) {
+        const uint8_t *p = data + (index * channels);
+        __m128 a_unused;
+        load_rgba4_u8_to_unit_f32_sse(p, _mm_set1_ps(1.0f / 255.0f), r, g, b, &a_unused);
+        return;
+    }
+
     npy_intp base0 = (index + 0) * channels;
     npy_intp base1 = (index + 1) * channels;
     npy_intp base2 = (index + 2) * channels;
@@ -705,6 +755,18 @@ static inline void load_rgb4_u8(const uint8_t *data, int channels, npy_intp inde
 
 static inline void load_rgb4_u8_to_u32_sse(const uint8_t *data, int channels, npy_intp index,
                                            __m128i *r, __m128i *g, __m128i *b) {
+    if (channels == 3) {
+        const uint8_t *p = data + (index * channels);
+        load_rgb4_u8_to_u32_sse_from_ptr(p, r, g, b);
+        return;
+    }
+    if (channels == 4) {
+        const uint8_t *p = data + (index * channels);
+        __m128i a_unused;
+        load_rgba4_u8_to_u32_sse(p, r, g, b, &a_unused);
+        return;
+    }
+
     npy_intp base0 = (index + 0) * channels;
     npy_intp base1 = (index + 1) * channels;
     npy_intp base2 = (index + 2) * channels;
@@ -825,6 +887,12 @@ static inline __m128 load_alpha4(const BlendArray *array, npy_intp index) {
 
 static inline void store_rgb4(BlendOutput *output, npy_intp index,
                               __m128 r, __m128 g, __m128 b) {
+    if (output->is_uint8 && output->channels == 3) {
+        uint8_t *out_ptr = output->u8 + (index * output->channels);
+        store_unit_f32_to_u8_rgb4(r, g, b, out_ptr);
+        return;
+    }
+
     float rv[4];
     float gv[4];
     float bv[4];
@@ -870,6 +938,25 @@ static inline void load_rgb8(const BlendArray *array, npy_intp index,
 
 static inline void load_rgb8_u8(const uint8_t *data, int channels, npy_intp index,
                                 __m256 *r, __m256 *g, __m256 *b) {
+    if (channels == 3) {
+        __m128 r0, g0, b0;
+        __m128 r1, g1, b1;
+        __m128 inv255 = _mm_set1_ps(1.0f / 255.0f);
+        load_rgb4_u8_to_unit_f32_sse(data + (index * channels), inv255, &r0, &g0, &b0);
+        load_rgb4_u8_to_unit_f32_sse(data + ((index + 4) * channels), inv255, &r1, &g1,
+                                     &b1);
+        *r = _mm256_set_m128(r1, r0);
+        *g = _mm256_set_m128(g1, g0);
+        *b = _mm256_set_m128(b1, b0);
+        return;
+    }
+    if (channels == 4) {
+        __m256 a_unused;
+        load_rgba8_u8_to_unit_f32_avx2(data + (index * channels), _mm256_set1_ps(1.0f / 255.0f),
+                                       r, g, b, &a_unused);
+        return;
+    }
+
     float rv[8];
     float gv[8];
     float bv[8];
@@ -886,6 +973,22 @@ static inline void load_rgb8_u8(const uint8_t *data, int channels, npy_intp inde
 
 static inline void load_rgb8_u8_to_u32_avx2(const uint8_t *data, int channels, npy_intp index,
                                             __m256i *r, __m256i *g, __m256i *b) {
+    if (channels == 3) {
+        __m128i r0, g0, b0;
+        __m128i r1, g1, b1;
+        load_rgb4_u8_to_u32_sse_from_ptr(data + (index * channels), &r0, &g0, &b0);
+        load_rgb4_u8_to_u32_sse_from_ptr(data + ((index + 4) * channels), &r1, &g1, &b1);
+        *r = _mm256_inserti128_si256(_mm256_castsi128_si256(r0), r1, 1);
+        *g = _mm256_inserti128_si256(_mm256_castsi128_si256(g0), g1, 1);
+        *b = _mm256_inserti128_si256(_mm256_castsi128_si256(b0), b1, 1);
+        return;
+    }
+    if (channels == 4) {
+        __m256i a_unused;
+        load_rgba8_u8_to_u32_avx2(data + (index * channels), r, g, b, &a_unused);
+        return;
+    }
+
     uint32_t rv[8];
     uint32_t gv[8];
     uint32_t bv[8];
@@ -901,6 +1004,19 @@ static inline void load_rgb8_u8_to_u32_avx2(const uint8_t *data, int channels, n
                           (int)gv[3], (int)gv[2], (int)gv[1], (int)gv[0]);
     *b = _mm256_set_epi32((int)bv[7], (int)bv[6], (int)bv[5], (int)bv[4],
                           (int)bv[3], (int)bv[2], (int)bv[1], (int)bv[0]);
+}
+
+static inline void load_rgb8_u8_to_u32_avx2_with_alpha(const uint8_t *data, npy_intp index,
+                                                       __m256i *r, __m256i *g, __m256i *b,
+                                                       __m256i *a) {
+    __m128i r0, g0, b0;
+    __m128i r1, g1, b1;
+    load_rgb4_u8_to_u32_sse_from_ptr(data + (index * 3), &r0, &g0, &b0);
+    load_rgb4_u8_to_u32_sse_from_ptr(data + ((index + 4) * 3), &r1, &g1, &b1);
+    *r = _mm256_inserti128_si256(_mm256_castsi128_si256(r0), r1, 1);
+    *g = _mm256_inserti128_si256(_mm256_castsi128_si256(g0), g1, 1);
+    *b = _mm256_inserti128_si256(_mm256_castsi128_si256(b0), b1, 1);
+    *a = _mm256_set1_epi32(255);
 }
 
 static inline void load_rgb8_f32(const float *data, int channels, npy_intp index,
@@ -957,6 +1073,20 @@ static inline __m256 load_alpha8(const BlendArray *array, npy_intp index) {
 
 static inline void store_rgb8(BlendOutput *output, npy_intp index,
                               __m256 r, __m256 g, __m256 b) {
+    if (output->is_uint8 && output->channels == 3) {
+        uint8_t *out_ptr = output->u8 + (index * output->channels);
+        __m128 r0 = _mm256_castps256_ps128(r);
+        __m128 r1 = _mm256_extractf128_ps(r, 1);
+        __m128 g0 = _mm256_castps256_ps128(g);
+        __m128 g1 = _mm256_extractf128_ps(g, 1);
+        __m128 b0 = _mm256_castps256_ps128(b);
+        __m128 b1 = _mm256_extractf128_ps(b, 1);
+
+        store_unit_f32_to_u8_rgb4(r0, g0, b0, out_ptr);
+        store_unit_f32_to_u8_rgb4(r1, g1, b1, out_ptr + 12);
+        return;
+    }
+
     float rv[8];
     float gv[8];
     float bv[8];
@@ -1214,9 +1344,10 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
                             );
                             in_a = u32_to_unit_f32_avx2(in_a_u, inv255256);
                         } else {
-                            load_rgb8_u8_to_u32_avx2(background.u8, background.channels, index,
-                                                     &in_r_u, &in_g_u, &in_b_u);
-                            in_a = _mm256_set1_ps(1.0f);
+                            load_rgb8_u8_to_u32_avx2_with_alpha(background.u8, index,
+                                                                &in_r_u, &in_g_u, &in_b_u,
+                                                                &in_a_u);
+                            in_a = u32_to_unit_f32_avx2(in_a_u, inv255256);
                         }
                         in_r = u32_to_unit_f32_avx2(in_r_u, inv255256);
                         in_g = u32_to_unit_f32_avx2(in_g_u, inv255256);
@@ -1232,9 +1363,10 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
                             );
                             layer_a = u32_to_unit_f32_avx2(layer_a_u, inv255256);
                         } else {
-                            load_rgb8_u8_to_u32_avx2(foreground.u8, foreground.channels, index,
-                                                     &layer_r_u, &layer_g_u, &layer_b_u);
-                            layer_a = _mm256_set1_ps(1.0f);
+                            load_rgb8_u8_to_u32_avx2_with_alpha(foreground.u8, index,
+                                                                &layer_r_u, &layer_g_u,
+                                                                &layer_b_u, &layer_a_u);
+                            layer_a = u32_to_unit_f32_avx2(layer_a_u, inv255256);
                         }
 
                         __m256 comp_alpha = _mm256_mul_ps(_mm256_min_ps(in_a, layer_a), opacity256);
@@ -1622,9 +1754,14 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
                             );
                             in_a = u32_to_unit_f32_sse(in_a_u, inv255128);
                         } else {
-                            load_rgb4_u8_to_u32_sse(background.u8, background.channels, index,
-                                                    &in_r_u, &in_g_u, &in_b_u);
-                            in_a = _mm_set1_ps(1.0f);
+                            load_rgb4_u8_to_u32_sse_with_alpha(
+                                background.u8 + (index * background.channels),
+                                &in_r_u,
+                                &in_g_u,
+                                &in_b_u,
+                                &in_a_u
+                            );
+                            in_a = u32_to_unit_f32_sse(in_a_u, inv255128);
                         }
                         in_r = u32_to_unit_f32_sse(in_r_u, inv255128);
                         in_g = u32_to_unit_f32_sse(in_g_u, inv255128);
@@ -1640,9 +1777,14 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
                             );
                             layer_a = u32_to_unit_f32_sse(layer_a_u, inv255128);
                         } else {
-                            load_rgb4_u8_to_u32_sse(foreground.u8, foreground.channels, index,
-                                                    &layer_r_u, &layer_g_u, &layer_b_u);
-                            layer_a = _mm_set1_ps(1.0f);
+                            load_rgb4_u8_to_u32_sse_with_alpha(
+                                foreground.u8 + (index * foreground.channels),
+                                &layer_r_u,
+                                &layer_g_u,
+                                &layer_b_u,
+                                &layer_a_u
+                            );
+                            layer_a = u32_to_unit_f32_sse(layer_a_u, inv255128);
                         }
 
                         __m128 comp_alpha = _mm_mul_ps(_mm_min_ps(in_a, layer_a), opacity128);
