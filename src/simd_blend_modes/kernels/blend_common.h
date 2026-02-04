@@ -373,6 +373,28 @@ static inline __m128i pack_unit_f32_to_u8_rgb4(__m128 fr, __m128 fg, __m128 fb) 
     return packed;
 }
 
+static inline __m128i pack_u32_to_u8_rgb4(__m128i r, __m128i g, __m128i b) {
+    const __m128i zero = _mm_setzero_si128();
+    __m128i r16 = _mm_packus_epi32(r, zero);
+    __m128i g16 = _mm_packus_epi32(g, zero);
+    __m128i b16 = _mm_packus_epi32(b, zero);
+
+    __m128i r8 = _mm_packus_epi16(r16, zero);
+    __m128i g8 = _mm_packus_epi16(g16, zero);
+    __m128i b8 = _mm_packus_epi16(b16, zero);
+
+    const __m128i mask_r = _mm_load_si128((const __m128i *)k_mask_pack_rgb_r);
+    const __m128i mask_g = _mm_load_si128((const __m128i *)k_mask_pack_rgb_g);
+    const __m128i mask_b = _mm_load_si128((const __m128i *)k_mask_pack_rgb_b);
+
+    __m128i packed = _mm_or_si128(
+        _mm_or_si128(_mm_shuffle_epi8(r8, mask_r),
+                     _mm_shuffle_epi8(g8, mask_g)),
+        _mm_shuffle_epi8(b8, mask_b));
+
+    return packed;
+}
+
 static inline __m128i pack_unit_f32_to_u8_rgba4(__m128 fr, __m128 fg, __m128 fb, __m128 fa) {
     const __m128 scale = _mm_set1_ps(255.0f);
     const __m128i zero = _mm_setzero_si128();
@@ -413,6 +435,13 @@ static inline void store_unit_f32_to_u8_rgb4(__m128 fr, __m128 fg, __m128 fb,
     memcpy(out_ptr + 8, &tail, sizeof(tail));
 }
 
+static inline void store_u32_to_u8_rgb4(__m128i r, __m128i g, __m128i b, uint8_t *out_ptr) {
+    __m128i packed = pack_u32_to_u8_rgb4(r, g, b);
+    _mm_storel_epi64((__m128i*)out_ptr, packed);
+    __m128i tail_vec = _mm_srli_si128(packed, 8);
+    uint32_t tail = (uint32_t)_mm_cvtsi128_si32(tail_vec);
+    memcpy(out_ptr + 8, &tail, sizeof(tail));
+}
 static inline void store_unit_f32_to_u8_rgb4_u16(__m128 fr, __m128 fg, __m128 fb,
                                                  uint8_t *out_ptr) {
     __m128i packed = pack_unit_f32_to_u8_rgb4(fr, fg, fb);
@@ -2416,6 +2445,65 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
         const npy_intp prefetch_distance = 16;
         if (background.is_uint8) {
             if (foreground.is_uint8) {
+                if (background.channels == 3 && foreground.channels == 3) {
+                    uint8_t *out_ptr = output.u8 + (index * output.channels);
+                    int alpha_u8 = (int)lroundf(opacity * 255.0f);
+                    if (alpha_u8 < 0) {
+                        alpha_u8 = 0;
+                    } else if (alpha_u8 > 255) {
+                        alpha_u8 = 255;
+                    }
+                    int inv_alpha_u8 = 255 - alpha_u8;
+                    const __m256i alpha256 = _mm256_set1_epi32(alpha_u8);
+                    const __m256i inv_alpha256 = _mm256_set1_epi32(inv_alpha_u8);
+                    const __m256i rounding = _mm256_set1_epi32(128);
+
+                    for (; index + 7 < pixels; index += 8) {
+                        npy_intp prefetch_index = index + prefetch_distance;
+                        _mm_prefetch((const char *)(background.u8 + (prefetch_index * 3)),
+                                     _MM_HINT_T0);
+                        _mm_prefetch((const char *)(foreground.u8 + (prefetch_index * 3)),
+                                     _MM_HINT_T0);
+
+                        __m256i in_r_u, in_g_u, in_b_u, in_a_u;
+                        __m256i layer_r_u, layer_g_u, layer_b_u, layer_a_u;
+                        load_rgb8_u8_to_u32_avx2_with_alpha(background.u8, index,
+                                                            &in_r_u, &in_g_u, &in_b_u,
+                                                            &in_a_u);
+                        load_rgb8_u8_to_u32_avx2_with_alpha(foreground.u8, index,
+                                                            &layer_r_u, &layer_g_u, &layer_b_u,
+                                                            &layer_a_u);
+
+                        __m256i sum_r = _mm256_add_epi32(_mm256_mullo_epi32(in_r_u, inv_alpha256),
+                                                         _mm256_mullo_epi32(layer_r_u, alpha256));
+                        __m256i sum_g = _mm256_add_epi32(_mm256_mullo_epi32(in_g_u, inv_alpha256),
+                                                         _mm256_mullo_epi32(layer_g_u, alpha256));
+                        __m256i sum_b = _mm256_add_epi32(_mm256_mullo_epi32(in_b_u, inv_alpha256),
+                                                         _mm256_mullo_epi32(layer_b_u, alpha256));
+
+                        sum_r = _mm256_add_epi32(sum_r, rounding);
+                        sum_g = _mm256_add_epi32(sum_g, rounding);
+                        sum_b = _mm256_add_epi32(sum_b, rounding);
+                        sum_r = _mm256_add_epi32(sum_r, _mm256_srli_epi32(sum_r, 8));
+                        sum_g = _mm256_add_epi32(sum_g, _mm256_srli_epi32(sum_g, 8));
+                        sum_b = _mm256_add_epi32(sum_b, _mm256_srli_epi32(sum_b, 8));
+                        __m256i out_r_u = _mm256_srli_epi32(sum_r, 8);
+                        __m256i out_g_u = _mm256_srli_epi32(sum_g, 8);
+                        __m256i out_b_u = _mm256_srli_epi32(sum_b, 8);
+
+                        __m128i r0 = _mm256_castsi256_si128(out_r_u);
+                        __m128i r1 = _mm256_extracti128_si256(out_r_u, 1);
+                        __m128i g0 = _mm256_castsi256_si128(out_g_u);
+                        __m128i g1 = _mm256_extracti128_si256(out_g_u, 1);
+                        __m128i b0 = _mm256_castsi256_si128(out_b_u);
+                        __m128i b1 = _mm256_extracti128_si256(out_b_u, 1);
+
+                        store_u32_to_u8_rgb4(r0, g0, b0, out_ptr);
+                        store_u32_to_u8_rgb4(r1, g1, b1, out_ptr + 12);
+
+                        out_ptr += 24;
+                    }
+                } else {
                 for (; index + 7 < pixels; index += 8) {
                     npy_intp prefetch_index = index + prefetch_distance;
                     _mm_prefetch((const char *)(background.u8 + (prefetch_index * background.channels)),
@@ -2505,6 +2593,7 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
                         store_rgb8(&output, index, out_r, out_g, out_b);
                         store_alpha8(&output, index, out_a);
                     }
+                }
                 }
             } else {
                 for (; index + 7 < pixels; index += 8) {
@@ -2761,6 +2850,58 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
     if (kernel == KERNEL_SSE42 || kernel == KERNEL_AVX2) {
         if (background.is_uint8) {
             if (foreground.is_uint8) {
+                if (background.channels == 3 && foreground.channels == 3) {
+                    uint8_t *out_ptr = output.u8 + (index * output.channels);
+                    int alpha_u8 = (int)lroundf(opacity * 255.0f);
+                    if (alpha_u8 < 0) {
+                        alpha_u8 = 0;
+                    } else if (alpha_u8 > 255) {
+                        alpha_u8 = 255;
+                    }
+                    int inv_alpha_u8 = 255 - alpha_u8;
+                    const __m128i alpha128 = _mm_set1_epi32(alpha_u8);
+                    const __m128i inv_alpha128 = _mm_set1_epi32(inv_alpha_u8);
+                    const __m128i rounding128 = _mm_set1_epi32(128);
+
+                    for (; index + 3 < pixels; index += 4) {
+                        __m128i in_r_u, in_g_u, in_b_u, in_a_u;
+                        __m128i layer_r_u, layer_g_u, layer_b_u, layer_a_u;
+                        load_rgb4_u8_to_u32_sse_with_alpha(
+                            background.u8 + (index * 3),
+                            &in_r_u,
+                            &in_g_u,
+                            &in_b_u,
+                            &in_a_u
+                        );
+                        load_rgb4_u8_to_u32_sse_with_alpha(
+                            foreground.u8 + (index * 3),
+                            &layer_r_u,
+                            &layer_g_u,
+                            &layer_b_u,
+                            &layer_a_u
+                        );
+
+                        __m128i sum_r = _mm_add_epi32(_mm_mullo_epi32(in_r_u, inv_alpha128),
+                                                      _mm_mullo_epi32(layer_r_u, alpha128));
+                        __m128i sum_g = _mm_add_epi32(_mm_mullo_epi32(in_g_u, inv_alpha128),
+                                                      _mm_mullo_epi32(layer_g_u, alpha128));
+                        __m128i sum_b = _mm_add_epi32(_mm_mullo_epi32(in_b_u, inv_alpha128),
+                                                      _mm_mullo_epi32(layer_b_u, alpha128));
+
+                        sum_r = _mm_add_epi32(sum_r, rounding128);
+                        sum_g = _mm_add_epi32(sum_g, rounding128);
+                        sum_b = _mm_add_epi32(sum_b, rounding128);
+                        sum_r = _mm_add_epi32(sum_r, _mm_srli_epi32(sum_r, 8));
+                        sum_g = _mm_add_epi32(sum_g, _mm_srli_epi32(sum_g, 8));
+                        sum_b = _mm_add_epi32(sum_b, _mm_srli_epi32(sum_b, 8));
+                        __m128i out_r_u = _mm_srli_epi32(sum_r, 8);
+                        __m128i out_g_u = _mm_srli_epi32(sum_g, 8);
+                        __m128i out_b_u = _mm_srli_epi32(sum_b, 8);
+
+                        store_u32_to_u8_rgb4(out_r_u, out_g_u, out_b_u, out_ptr);
+                        out_ptr += 12;
+                    }
+                } else {
                 for (; index + 3 < pixels; index += 4) {
                     __m128i in_r_u, in_g_u, in_b_u, in_a_u;
                     __m128i layer_r_u, layer_g_u, layer_b_u, layer_a_u;
@@ -2840,6 +2981,7 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
                         store_rgb4(&output, index, out_r, out_g, out_b);
                         store_alpha4(&output, index, out_a);
                     }
+                }
                 }
             } else {
                 for (; index + 3 < pixels; index += 4) {
