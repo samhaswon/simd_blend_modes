@@ -2360,15 +2360,16 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
             uint8_t *out = output.u8;
             if (foreground.is_uint8) {
                 const uint8_t *fg = foreground.u8;
-                for (npy_intp index = 0; index < pixels; ++index) {
-                    npy_intp fg_offset = index * foreground.channels;
-                    npy_intp out_offset = index * output.channels;
-                    for (int c = 0; c < 3; ++c) {
-                        float value = read_channel_u8(fg, fg_offset + c);
-                        write_channel_u8(out, out_offset + c, value);
-                    }
-                    if (output.channels == 4) {
-                        write_channel_u8(out, out_offset + 3, 1.0f);
+                if (output.channels == 3) {
+                    memcpy(out, fg, (size_t)pixels * 3);
+                } else {
+                    for (npy_intp index = 0; index < pixels; ++index) {
+                        npy_intp fg_offset = index * foreground.channels;
+                        npy_intp out_offset = index * output.channels;
+                        out[out_offset + 0] = fg[fg_offset + 0];
+                        out[out_offset + 1] = fg[fg_offset + 1];
+                        out[out_offset + 2] = fg[fg_offset + 2];
+                        out[out_offset + 3] = 255;
                     }
                 }
             } else {
@@ -2402,15 +2403,16 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
                 }
             } else {
                 const float *fg = foreground.f32;
-                for (npy_intp index = 0; index < pixels; ++index) {
-                    npy_intp fg_offset = index * foreground.channels;
-                    npy_intp out_offset = index * output.channels;
-                    for (int c = 0; c < 3; ++c) {
-                        float value = read_channel_f32(fg, fg_offset + c);
-                        write_channel_f32(out, out_offset + c, value);
-                    }
-                    if (output.channels == 4) {
-                        write_channel_f32(out, out_offset + 3, 1.0f);
+                if (output.channels == 3) {
+                    memcpy(out, fg, (size_t)pixels * 3 * sizeof(float));
+                } else {
+                    for (npy_intp index = 0; index < pixels; ++index) {
+                        npy_intp fg_offset = index * foreground.channels;
+                        npy_intp out_offset = index * output.channels;
+                        out[out_offset + 0] = fg[fg_offset + 0];
+                        out[out_offset + 1] = fg[fg_offset + 1];
+                        out[out_offset + 2] = fg[fg_offset + 2];
+                        out[out_offset + 3] = 255.0f;
                     }
                 }
             }

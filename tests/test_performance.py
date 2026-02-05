@@ -41,20 +41,32 @@ def _iterations_for_size(height: int, width: int) -> int:
     return 3
 
 
-def _blend_reference(func: Callable[..., np.ndarray], bg: np.ndarray, fg: np.ndarray) -> None:
-    func(bg, fg, 0.5)
+def _opacities_for_case(case: BenchmarkCase) -> List[float]:
+    if case.height == 512 and case.width == 512:
+        return [0.5, 0.0, 1.0]
+    return [0.5]
+
+
+def _blend_reference(
+    func: Callable[..., np.ndarray],
+    bg: np.ndarray,
+    fg: np.ndarray,
+    opacity: float,
+) -> None:
+    func(bg, fg, opacity)
 
 
 def _blend_reference_with_alpha(
     func: Callable[..., np.ndarray],
     bg: np.ndarray,
     fg: np.ndarray,
+    opacity: float,
 ) -> None:
     bg_alpha = np.full(bg.shape[:2] + (1,), 255.0, dtype=bg.dtype)
     fg_alpha = np.full(fg.shape[:2] + (1,), 255.0, dtype=fg.dtype)
     bg_ref = np.dstack((bg, bg_alpha))
     fg_ref = np.dstack((fg, fg_alpha))
-    func(bg_ref, fg_ref, 0.5)
+    func(bg_ref, fg_ref, opacity)
 
 
 def _blend_simd(
@@ -62,24 +74,27 @@ def _blend_simd(
     bg: np.ndarray,
     fg: np.ndarray,
     kernel: str,
+    opacity: float,
 ) -> None:
-    func(bg, fg, 0.5, kernel)
+    func(bg, fg, opacity, kernel)
 
 
 def _blend_reference_with_cast(
     func: Callable[..., np.ndarray],
     bg: np.ndarray,
     fg: np.ndarray,
+    opacity: float,
 ) -> None:
     bg_ref = bg.astype(np.float32)
     fg_ref = fg.astype(np.float32)
-    func(bg_ref, fg_ref, 0.5)
+    func(bg_ref, fg_ref, opacity)
 
 
 def _blend_reference_with_cast_and_alpha(
     func: Callable[..., np.ndarray],
     bg: np.ndarray,
     fg: np.ndarray,
+    opacity: float,
 ) -> None:
     bg_ref = bg.astype(np.float32)
     fg_ref = fg.astype(np.float32)
@@ -87,7 +102,7 @@ def _blend_reference_with_cast_and_alpha(
     fg_alpha = np.full(fg_ref.shape[:2] + (1,), 255.0, dtype=fg_ref.dtype)
     bg_ref = np.dstack((bg_ref, bg_alpha))
     fg_ref = np.dstack((fg_ref, fg_alpha))
-    func(bg_ref, fg_ref, 0.5)
+    func(bg_ref, fg_ref, opacity)
 
 
 class TestPerformance(unittest.TestCase):
@@ -128,10 +143,11 @@ class TestPerformance(unittest.TestCase):
             ("uint8", np.uint8),
             ("float32", np.float32),
         ]
-        results: Dict[Tuple[str, str, str, str, int], Dict[str, float]] = {}
+        results: Dict[Tuple[str, str, str, str, int, float], Dict[str, float]] = {}
 
         for case in cases:
             iterations = _iterations_for_size(case.height, case.width)
+            opacities = _opacities_for_case(case)
             for input_label, input_dtype in input_kinds:
                 try:
                     rng = np.random.default_rng(1234)
@@ -168,56 +184,75 @@ class TestPerformance(unittest.TestCase):
                     for mode in modes:
                         ref_func = getattr(reference, mode)
                         simd_func = getattr(simd_blend_modes, mode)
-
-                        gc.collect()
-                        if channels == 3:
-                            if input_dtype == np.float32:
-                                ref_time = _time_call(
-                                    lambda: _blend_reference_with_alpha(
-                                        ref_func,
-                                        background,
-                                        foreground,
-                                    ),
-                                    iterations,
-                                )
-                            else:
-                                ref_time = _time_call(
-                                    lambda: _blend_reference_with_cast_and_alpha(
-                                        ref_func,
-                                        background,
-                                        foreground,
-                                    ),
-                                    iterations,
-                                )
-                        else:
-                            if input_dtype == np.float32:
-                                ref_time = _time_call(
-                                    lambda: _blend_reference(ref_func, background, foreground),
-                                    iterations,
-                                )
-                            else:
-                                ref_time = _time_call(
-                                    lambda: _blend_reference_with_cast(ref_func, background, foreground),
-                                    iterations,
-                                )
-
-                        for kernel in available_kernels:
+                        for opacity in opacities:
                             gc.collect()
-                            simd_time = _time_call(
-                                lambda: _blend_simd(simd_func, background, foreground, kernel),
-                                iterations,
-                            )
-                            speedup = ref_time / simd_time if simd_time > 0 else float("inf")
-                            results[(case.name, input_label, mode, kernel, channels)] = {
-                                "ref_time": ref_time,
-                                "simd_time": simd_time,
-                                "speedup": speedup,
-                            }
+                            if channels == 3:
+                                if input_dtype == np.float32:
+                                    ref_time = _time_call(
+                                        lambda: _blend_reference_with_alpha(
+                                            ref_func,
+                                            background,
+                                            foreground,
+                                            opacity,
+                                        ),
+                                        iterations,
+                                    )
+                                else:
+                                    ref_time = _time_call(
+                                        lambda: _blend_reference_with_cast_and_alpha(
+                                            ref_func,
+                                            background,
+                                            foreground,
+                                            opacity,
+                                        ),
+                                        iterations,
+                                    )
+                            else:
+                                if input_dtype == np.float32:
+                                    ref_time = _time_call(
+                                        lambda: _blend_reference(
+                                            ref_func,
+                                            background,
+                                            foreground,
+                                            opacity,
+                                        ),
+                                        iterations,
+                                    )
+                                else:
+                                    ref_time = _time_call(
+                                        lambda: _blend_reference_with_cast(
+                                            ref_func,
+                                            background,
+                                            foreground,
+                                            opacity,
+                                        ),
+                                        iterations,
+                                    )
+
+                            for kernel in available_kernels:
+                                gc.collect()
+                                simd_time = _time_call(
+                                    lambda: _blend_simd(
+                                        simd_func,
+                                        background,
+                                        foreground,
+                                        kernel,
+                                        opacity,
+                                    ),
+                                    iterations,
+                                )
+                                speedup = ref_time / simd_time if simd_time > 0 else float("inf")
+                                results[(case.name, input_label, mode, kernel, channels, opacity)] = {
+                                    "ref_time": ref_time,
+                                    "simd_time": simd_time,
+                                    "speedup": speedup,
+                                }
 
         headers = [
             "Case",
             "Input",
             "Channels",
+            "Opacity",
             "Mode",
             "Kernel",
             "Ref (s)",
@@ -230,24 +265,26 @@ class TestPerformance(unittest.TestCase):
             for input_label, _ in input_kinds:
                 for channels in (3, 4):
                     for mode in modes:
-                        for kernel in available_kernels:
-                            key = (case.name, input_label, mode, kernel, channels)
-                            if key not in results:
-                                continue
-                            entry = results[key]
-                            rows.append(
-                                [
-                                    case.name,
-                                    input_label,
-                                    str(channels),
-                                    mode,
-                                    kernel,
-                                    f"{entry['ref_time']:.6f}",
-                                    f"{entry['simd_time']:.6f}",
-                                    f"{entry['speedup']:.2f}x",
-                                    f"{(entry['simd_time'] / entry['ref_time'] - 1.0) * 100.0:.2f}%",
-                                ]
-                            )
+                        for opacity in _opacities_for_case(case):
+                            for kernel in available_kernels:
+                                key = (case.name, input_label, mode, kernel, channels, opacity)
+                                if key not in results:
+                                    continue
+                                entry = results[key]
+                                rows.append(
+                                    [
+                                        case.name,
+                                        input_label,
+                                        str(channels),
+                                        f"{opacity:.2f}",
+                                        mode,
+                                        kernel,
+                                        f"{entry['ref_time']:.6f}",
+                                        f"{entry['simd_time']:.6f}",
+                                        f"{entry['speedup']:.2f}x",
+                                        f"{(entry['simd_time'] / entry['ref_time'] - 1.0) * 100.0:.2f}%",
+                                    ]
+                                )
 
         columns = list(zip(*([headers] + rows))) if rows else [headers]
         widths = [max(len(item) for item in col) for col in columns]
@@ -272,11 +309,12 @@ class TestPerformance(unittest.TestCase):
         for mode in modes:
             for kernel in available_kernels:
                 entries = [
-                    results[(case.name, input_label, mode, kernel, channels)]
+                    results[(case.name, input_label, mode, kernel, channels, opacity)]
                     for case in cases
                     for input_label, _ in input_kinds
                     for channels in (3, 4)
-                    if (case.name, input_label, mode, kernel, channels) in results
+                    for opacity in _opacities_for_case(case)
+                    if (case.name, input_label, mode, kernel, channels, opacity) in results
                 ]
                 if not entries:
                     continue
