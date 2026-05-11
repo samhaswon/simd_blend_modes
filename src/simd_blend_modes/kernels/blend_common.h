@@ -809,6 +809,36 @@ static inline __m128 blend_flat_ps128(__m128 in_c, __m128 layer_c, __m128 opacit
     return out;
 }
 
+static inline __m256 load_f32x8(const float *p, int aligned) {
+    if (aligned) {
+        return _mm256_load_ps(p);
+    }
+    return _mm256_loadu_ps(p);
+}
+
+static inline void store_f32x8(float *p, __m256 value, int aligned) {
+    if (aligned) {
+        _mm256_store_ps(p, value);
+        return;
+    }
+    _mm256_storeu_ps(p, value);
+}
+
+static inline __m128 load_f32x4(const float *p, int aligned) {
+    if (aligned) {
+        return _mm_load_ps(p);
+    }
+    return _mm_loadu_ps(p);
+}
+
+static inline void store_f32x4(float *p, __m128 value, int aligned) {
+    if (aligned) {
+        _mm_store_ps(p, value);
+        return;
+    }
+    _mm_storeu_ps(p, value);
+}
+
 static inline void load_rgb4_u8(const uint8_t *data, int channels, npy_intp index,
                                 __m128 *r, __m128 *g, __m128 *b) {
     if (channels == 3) {
@@ -1447,51 +1477,63 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
                     _mm_store_si128((__m128i *)(output.u8 + elem),
                                     pack_two_unit_f32_avx2_to_u8(out_lo, out_hi));
                 }
-            } else if (!background.is_uint8 && !foreground.is_uint8 &&
-                       ptr_is_aligned(background.f32, 32) &&
-                       ptr_is_aligned(foreground.f32, 32) &&
-                       ptr_is_aligned(output.f32, 32)) {
+            } else if (!background.is_uint8 && !foreground.is_uint8) {
+                int bg_aligned = ptr_is_aligned(background.f32, 32);
+                int fg_aligned = ptr_is_aligned(foreground.f32, 32);
+                int out_aligned = ptr_is_aligned(output.f32, 32);
                 for (; elem + 7 < elements; elem += 8) {
-                    __m256 in_c = _mm256_mul_ps(_mm256_load_ps(background.f32 + elem), inv255256);
-                    __m256 layer_c = _mm256_mul_ps(_mm256_load_ps(foreground.f32 + elem),
+                    __m256 in_c = _mm256_mul_ps(load_f32x8(background.f32 + elem, bg_aligned),
+                                                inv255256);
+                    __m256 layer_c = _mm256_mul_ps(load_f32x8(foreground.f32 + elem, fg_aligned),
                                                    inv255256);
                     __m256 out_c = blend_flat_ps256(in_c, layer_c, opacity256, one256,
                                                     comp_avx, clip_output);
-                    _mm256_store_ps(output.f32 + elem, _mm256_mul_ps(out_c,
-                                                                     _mm256_set1_ps(255.0f)));
+                    store_f32x8(output.f32 + elem, _mm256_mul_ps(out_c,
+                                                                 _mm256_set1_ps(255.0f)),
+                                out_aligned);
                 }
-            } else if (background.is_uint8 && !foreground.is_uint8 &&
-                       ptr_is_aligned(background.u8, 16) &&
-                       ptr_is_aligned(foreground.f32, 32) &&
-                       ptr_is_aligned(output.u8, 16)) {
+            } else if (background.is_uint8 && !foreground.is_uint8) {
+                int bg_aligned = ptr_is_aligned(background.u8, 16);
+                int fg_aligned = ptr_is_aligned(foreground.f32, 32);
+                int out_aligned = ptr_is_aligned(output.u8, 16);
                 for (; elem + 15 < elements; elem += 16) {
-                    __m128i in_bytes = _mm_load_si128((const __m128i *)(background.u8 + elem));
+                    __m128i in_bytes = bg_aligned ?
+                        _mm_load_si128((const __m128i *)(background.u8 + elem)) :
+                        _mm_loadu_si128((const __m128i *)(background.u8 + elem));
                     __m256i in_lo_u = _mm256_cvtepu8_epi32(in_bytes);
                     __m256i in_hi_u = _mm256_cvtepu8_epi32(_mm_srli_si128(in_bytes, 8));
                     __m256 in_lo = u32_to_unit_f32_avx2(in_lo_u, inv255256);
                     __m256 in_hi = u32_to_unit_f32_avx2(in_hi_u, inv255256);
-                    __m256 layer_lo = _mm256_mul_ps(_mm256_load_ps(foreground.f32 + elem),
+                    __m256 layer_lo = _mm256_mul_ps(load_f32x8(foreground.f32 + elem, fg_aligned),
                                                     inv255256);
-                    __m256 layer_hi = _mm256_mul_ps(_mm256_load_ps(foreground.f32 + elem + 8),
+                    __m256 layer_hi = _mm256_mul_ps(load_f32x8(foreground.f32 + elem + 8,
+                                                               fg_aligned),
                                                     inv255256);
                     __m256 out_lo = blend_flat_ps256(in_lo, layer_lo, opacity256, one256,
                                                      comp_avx, clip_output);
                     __m256 out_hi = blend_flat_ps256(in_hi, layer_hi, opacity256, one256,
                                                      comp_avx, clip_output);
-                    _mm_store_si128((__m128i *)(output.u8 + elem),
-                                    pack_two_unit_f32_avx2_to_u8(out_lo, out_hi));
+                    __m128i packed = pack_two_unit_f32_avx2_to_u8(out_lo, out_hi);
+                    if (out_aligned) {
+                        _mm_store_si128((__m128i *)(output.u8 + elem), packed);
+                    } else {
+                        _mm_storeu_si128((__m128i *)(output.u8 + elem), packed);
+                    }
                 }
-            } else if (!background.is_uint8 && foreground.is_uint8 &&
-                       ptr_is_aligned(background.f32, 32) &&
-                       ptr_is_aligned(foreground.u8, 16) &&
-                       ptr_is_aligned(output.f32, 32)) {
+            } else if (!background.is_uint8 && foreground.is_uint8) {
+                int bg_aligned = ptr_is_aligned(background.f32, 32);
+                int fg_aligned = ptr_is_aligned(foreground.u8, 16);
+                int out_aligned = ptr_is_aligned(output.f32, 32);
                 for (; elem + 15 < elements; elem += 16) {
-                    __m128i layer_bytes = _mm_load_si128((const __m128i *)(foreground.u8 + elem));
+                    __m128i layer_bytes = fg_aligned ?
+                        _mm_load_si128((const __m128i *)(foreground.u8 + elem)) :
+                        _mm_loadu_si128((const __m128i *)(foreground.u8 + elem));
                     __m256i layer_lo_u = _mm256_cvtepu8_epi32(layer_bytes);
                     __m256i layer_hi_u = _mm256_cvtepu8_epi32(_mm_srli_si128(layer_bytes, 8));
-                    __m256 in_lo = _mm256_mul_ps(_mm256_load_ps(background.f32 + elem),
+                    __m256 in_lo = _mm256_mul_ps(load_f32x8(background.f32 + elem, bg_aligned),
                                                  inv255256);
-                    __m256 in_hi = _mm256_mul_ps(_mm256_load_ps(background.f32 + elem + 8),
+                    __m256 in_hi = _mm256_mul_ps(load_f32x8(background.f32 + elem + 8,
+                                                            bg_aligned),
                                                  inv255256);
                     __m256 layer_lo = u32_to_unit_f32_avx2(layer_lo_u, inv255256);
                     __m256 layer_hi = u32_to_unit_f32_avx2(layer_hi_u, inv255256);
@@ -1499,10 +1541,12 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
                                                      comp_avx, clip_output);
                     __m256 out_hi = blend_flat_ps256(in_hi, layer_hi, opacity256, one256,
                                                      comp_avx, clip_output);
-                    _mm256_store_ps(output.f32 + elem, _mm256_mul_ps(out_lo,
-                                                                     _mm256_set1_ps(255.0f)));
-                    _mm256_store_ps(output.f32 + elem + 8, _mm256_mul_ps(out_hi,
-                                                                         _mm256_set1_ps(255.0f)));
+                    store_f32x8(output.f32 + elem, _mm256_mul_ps(out_lo,
+                                                                 _mm256_set1_ps(255.0f)),
+                                out_aligned);
+                    store_f32x8(output.f32 + elem + 8, _mm256_mul_ps(out_hi,
+                                                                     _mm256_set1_ps(255.0f)),
+                                out_aligned);
                 }
             }
         }
@@ -1569,16 +1613,19 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
                     memcpy(output.u8 + elem + 8, &packed2, sizeof(packed2));
                     memcpy(output.u8 + elem + 12, &packed3, sizeof(packed3));
                 }
-            } else if (!background.is_uint8 && !foreground.is_uint8 &&
-                       ptr_is_aligned(background.f32, 16) &&
-                       ptr_is_aligned(foreground.f32, 16) &&
-                       ptr_is_aligned(output.f32, 16)) {
+            } else if (!background.is_uint8 && !foreground.is_uint8) {
+                int bg_aligned = ptr_is_aligned(background.f32, 16);
+                int fg_aligned = ptr_is_aligned(foreground.f32, 16);
+                int out_aligned = ptr_is_aligned(output.f32, 16);
                 for (; elem + 3 < elements; elem += 4) {
-                    __m128 in_c = _mm_mul_ps(_mm_load_ps(background.f32 + elem), inv255128);
-                    __m128 layer_c = _mm_mul_ps(_mm_load_ps(foreground.f32 + elem), inv255128);
+                    __m128 in_c = _mm_mul_ps(load_f32x4(background.f32 + elem, bg_aligned),
+                                             inv255128);
+                    __m128 layer_c = _mm_mul_ps(load_f32x4(foreground.f32 + elem, fg_aligned),
+                                                inv255128);
                     __m128 out_c = blend_flat_ps128(in_c, layer_c, opacity128, one,
                                                     comp_sse, clip_output);
-                    _mm_store_ps(output.f32 + elem, _mm_mul_ps(out_c, _mm_set1_ps(255.0f)));
+                    store_f32x4(output.f32 + elem, _mm_mul_ps(out_c, _mm_set1_ps(255.0f)),
+                                out_aligned);
                 }
             }
         }
@@ -1971,12 +2018,6 @@ static inline PyObject *blend_ratio_mode_simd(PyObject *args,
                 }
             } else {
                 for (; index + 7 < pixels; index += 8) {
-                    npy_intp prefetch_index = index + prefetch_distance;
-                    _mm_prefetch((const char *)(background.f32 + (prefetch_index * background.channels)),
-                                 _MM_HINT_T0);
-                    _mm_prefetch((const char *)(foreground.f32 + (prefetch_index * foreground.channels)),
-                                 _MM_HINT_T0);
-
                     __m256 in_r, in_g, in_b, in_a;
                     __m256 layer_r, layer_g, layer_b, layer_a;
                     if (background.channels == 4) {
