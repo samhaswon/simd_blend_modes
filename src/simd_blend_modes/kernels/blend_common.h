@@ -3977,21 +3977,34 @@ static inline lab_triplet lch_to_lab_triplet(lch_triplet lch)
 static inline rgb_triplet lch_blend_triplet(rgb_triplet bg, rgb_triplet fg,
                                             int use_l, int use_c, int use_h)
 {
-    lch_triplet bg_lch = lab_to_lch_triplet(rgb_to_lab_triplet(bg));
-    lch_triplet fg_lch = lab_to_lch_triplet(rgb_to_lab_triplet(fg));
-    lch_triplet out_lch = bg_lch;
+    lab_triplet bg_lab = rgb_to_lab_triplet(bg);
+    lab_triplet fg_lab = rgb_to_lab_triplet(fg);
+    float bg_chroma = hypotf(bg_lab.a, bg_lab.b);
+    float fg_chroma = hypotf(fg_lab.a, fg_lab.b);
+    lab_triplet out_lab = bg_lab;
 
     if (use_l) {
-        out_lch.l = fg_lch.l;
+        out_lab.l = fg_lab.l;
     }
-    if (use_c) {
-        out_lch.c = fg_lch.c;
-    }
-    if (use_h && fg_lch.c > 0.0f) {
-        out_lch.h = fg_lch.h;
+    if (use_c && use_h) {
+        out_lab.a = fg_lab.a;
+        out_lab.b = fg_lab.b;
+    } else if (use_c) {
+        if (bg_chroma > 0.0f) {
+            float scale = fg_chroma / bg_chroma;
+            out_lab.a = bg_lab.a * scale;
+            out_lab.b = bg_lab.b * scale;
+        } else {
+            out_lab.a = fg_chroma;
+            out_lab.b = 0.0f;
+        }
+    } else if (use_h && fg_chroma > 0.0f) {
+        float scale = bg_chroma / fg_chroma;
+        out_lab.a = fg_lab.a * scale;
+        out_lab.b = fg_lab.b * scale;
     }
 
-    return lab_to_rgb_triplet(lch_to_lab_triplet(out_lch));
+    return lab_to_rgb_triplet(out_lab);
 }
 
 static inline float vivid_light_channel(float bg, float fg)
@@ -4322,6 +4335,302 @@ static inline void hsl_to_rgb_ps256(__m256 h, __m256 s, __m256 l,
                                 _mm256_div_ps(chroma, value), _mm256_set1_ps(0.0f));
     hsv_to_rgb_ps256(h, hsv_s, value, r, g, b);
 }
+
+static inline __m128 srgb_to_linear_ps128(__m128 value)
+{
+    __m128 threshold = _mm_set1_ps(0.04045f);
+    __m128 linear = _mm_div_ps(value, _mm_set1_ps(12.92f));
+    __m128 pow_mask = _mm_cmpgt_ps(value, threshold);
+    float lanes[4], converted[4];
+    _mm_storeu_ps(lanes, value);
+    for (int i = 0; i < 4; ++i) {
+        converted[i] = lanes[i] > 0.04045f
+            ? powf((lanes[i] + 0.055f) / 1.055f, 2.4f)
+            : 0.0f;
+    }
+    return select_ps128(pow_mask, _mm_loadu_ps(converted), linear);
+}
+
+static inline __m256 srgb_to_linear_ps256(__m256 value)
+{
+    __m256 threshold = _mm256_set1_ps(0.04045f);
+    __m256 linear = _mm256_div_ps(value, _mm256_set1_ps(12.92f));
+    __m256 pow_mask = _mm256_cmp_ps(value, threshold, _CMP_GT_OQ);
+    float lanes[8], converted[8];
+    _mm256_storeu_ps(lanes, value);
+    for (int i = 0; i < 8; ++i) {
+        converted[i] = lanes[i] > 0.04045f
+            ? powf((lanes[i] + 0.055f) / 1.055f, 2.4f)
+            : 0.0f;
+    }
+    return select_ps256(pow_mask, _mm256_loadu_ps(converted), linear);
+}
+
+static inline __m128 linear_to_srgb_ps128(__m128 value)
+{
+    __m128 clamped = clamp01_ps128(value);
+    __m128 threshold = _mm_set1_ps(0.0031308f);
+    __m128 linear = _mm_mul_ps(clamped, _mm_set1_ps(12.92f));
+    __m128 pow_mask = _mm_cmpgt_ps(clamped, threshold);
+    float lanes[4], converted[4];
+    _mm_storeu_ps(lanes, clamped);
+    for (int i = 0; i < 4; ++i) {
+        converted[i] = lanes[i] > 0.0031308f
+            ? 1.055f * powf(lanes[i], 1.0f / 2.4f) - 0.055f
+            : 0.0f;
+    }
+    return select_ps128(pow_mask, _mm_loadu_ps(converted), linear);
+}
+
+static inline __m256 linear_to_srgb_ps256(__m256 value)
+{
+    __m256 clamped = clamp01_ps(value);
+    __m256 threshold = _mm256_set1_ps(0.0031308f);
+    __m256 linear = _mm256_mul_ps(clamped, _mm256_set1_ps(12.92f));
+    __m256 pow_mask = _mm256_cmp_ps(clamped, threshold, _CMP_GT_OQ);
+    float lanes[8], converted[8];
+    _mm256_storeu_ps(lanes, clamped);
+    for (int i = 0; i < 8; ++i) {
+        converted[i] = lanes[i] > 0.0031308f
+            ? 1.055f * powf(lanes[i], 1.0f / 2.4f) - 0.055f
+            : 0.0f;
+    }
+    return select_ps256(pow_mask, _mm256_loadu_ps(converted), linear);
+}
+
+static inline __m128 xyz_to_lab_component_ps128(__m128 value)
+{
+    __m128 epsilon = _mm_set1_ps(216.0f / 24389.0f);
+    __m128 kappa = _mm_set1_ps(24389.0f / 27.0f);
+    __m128 linear = _mm_div_ps(_mm_add_ps(_mm_mul_ps(kappa, value),
+                                          _mm_set1_ps(16.0f)),
+                               _mm_set1_ps(116.0f));
+    __m128 cbrt_mask = _mm_cmpgt_ps(value, epsilon);
+    float lanes[4], converted[4];
+    _mm_storeu_ps(lanes, value);
+    for (int i = 0; i < 4; ++i) {
+        converted[i] = lanes[i] > (216.0f / 24389.0f) ? cbrtf(lanes[i]) : 0.0f;
+    }
+    return select_ps128(cbrt_mask, _mm_loadu_ps(converted), linear);
+}
+
+static inline __m256 xyz_to_lab_component_ps256(__m256 value)
+{
+    __m256 epsilon = _mm256_set1_ps(216.0f / 24389.0f);
+    __m256 kappa = _mm256_set1_ps(24389.0f / 27.0f);
+    __m256 linear = _mm256_div_ps(_mm256_add_ps(_mm256_mul_ps(kappa, value),
+                                                _mm256_set1_ps(16.0f)),
+                                  _mm256_set1_ps(116.0f));
+    __m256 cbrt_mask = _mm256_cmp_ps(value, epsilon, _CMP_GT_OQ);
+    float lanes[8], converted[8];
+    _mm256_storeu_ps(lanes, value);
+    for (int i = 0; i < 8; ++i) {
+        converted[i] = lanes[i] > (216.0f / 24389.0f) ? cbrtf(lanes[i]) : 0.0f;
+    }
+    return select_ps256(cbrt_mask, _mm256_loadu_ps(converted), linear);
+}
+
+static inline __m128 lab_to_xyz_component_ps128(__m128 value)
+{
+    __m128 epsilon = _mm_set1_ps(216.0f / 24389.0f);
+    __m128 kappa = _mm_set1_ps(24389.0f / 27.0f);
+    __m128 value_cubed = _mm_mul_ps(_mm_mul_ps(value, value), value);
+    __m128 linear = _mm_div_ps(_mm_sub_ps(_mm_mul_ps(_mm_set1_ps(116.0f), value),
+                                          _mm_set1_ps(16.0f)), kappa);
+    return select_ps128(_mm_cmpgt_ps(value_cubed, epsilon), value_cubed, linear);
+}
+
+static inline __m256 lab_to_xyz_component_ps256(__m256 value)
+{
+    __m256 epsilon = _mm256_set1_ps(216.0f / 24389.0f);
+    __m256 kappa = _mm256_set1_ps(24389.0f / 27.0f);
+    __m256 value_cubed = _mm256_mul_ps(_mm256_mul_ps(value, value), value);
+    __m256 linear = _mm256_div_ps(
+        _mm256_sub_ps(_mm256_mul_ps(_mm256_set1_ps(116.0f), value),
+                      _mm256_set1_ps(16.0f)),
+        kappa
+    );
+    return select_ps256(_mm256_cmp_ps(value_cubed, epsilon, _CMP_GT_OQ), value_cubed, linear);
+}
+
+static inline void rgb_to_lab_ps128(__m128 r, __m128 g, __m128 b,
+                                    __m128 *l, __m128 *a, __m128 *lab_b)
+{
+    __m128 red = srgb_to_linear_ps128(r);
+    __m128 green = srgb_to_linear_ps128(g);
+    __m128 blue = srgb_to_linear_ps128(b);
+
+    __m128 x = mul_add_ps128(red, _mm_set1_ps(0.4124564f),
+               mul_add_ps128(green, _mm_set1_ps(0.3575761f),
+                             _mm_mul_ps(blue, _mm_set1_ps(0.1804375f))));
+    __m128 y = mul_add_ps128(red, _mm_set1_ps(0.2126729f),
+               mul_add_ps128(green, _mm_set1_ps(0.7151522f),
+                             _mm_mul_ps(blue, _mm_set1_ps(0.0721750f))));
+    __m128 z = mul_add_ps128(red, _mm_set1_ps(0.0193339f),
+               mul_add_ps128(green, _mm_set1_ps(0.1191920f),
+                             _mm_mul_ps(blue, _mm_set1_ps(0.9503041f))));
+
+    __m128 fx = xyz_to_lab_component_ps128(_mm_div_ps(x, _mm_set1_ps(0.95047f)));
+    __m128 fy = xyz_to_lab_component_ps128(y);
+    __m128 fz = xyz_to_lab_component_ps128(_mm_div_ps(z, _mm_set1_ps(1.08883f)));
+
+    *l = _mm_sub_ps(_mm_mul_ps(_mm_set1_ps(116.0f), fy), _mm_set1_ps(16.0f));
+    *a = _mm_mul_ps(_mm_set1_ps(500.0f), _mm_sub_ps(fx, fy));
+    *lab_b = _mm_mul_ps(_mm_set1_ps(200.0f), _mm_sub_ps(fy, fz));
+}
+
+static inline void rgb_to_lab_ps256(__m256 r, __m256 g, __m256 b,
+                                    __m256 *l, __m256 *a, __m256 *lab_b)
+{
+    __m256 red = srgb_to_linear_ps256(r);
+    __m256 green = srgb_to_linear_ps256(g);
+    __m256 blue = srgb_to_linear_ps256(b);
+
+    __m256 x = mul_add_ps256(red, _mm256_set1_ps(0.4124564f),
+               mul_add_ps256(green, _mm256_set1_ps(0.3575761f),
+                             _mm256_mul_ps(blue, _mm256_set1_ps(0.1804375f))));
+    __m256 y = mul_add_ps256(red, _mm256_set1_ps(0.2126729f),
+               mul_add_ps256(green, _mm256_set1_ps(0.7151522f),
+                             _mm256_mul_ps(blue, _mm256_set1_ps(0.0721750f))));
+    __m256 z = mul_add_ps256(red, _mm256_set1_ps(0.0193339f),
+               mul_add_ps256(green, _mm256_set1_ps(0.1191920f),
+                             _mm256_mul_ps(blue, _mm256_set1_ps(0.9503041f))));
+
+    __m256 fx = xyz_to_lab_component_ps256(_mm256_div_ps(x, _mm256_set1_ps(0.95047f)));
+    __m256 fy = xyz_to_lab_component_ps256(y);
+    __m256 fz = xyz_to_lab_component_ps256(_mm256_div_ps(z, _mm256_set1_ps(1.08883f)));
+
+    *l = _mm256_sub_ps(_mm256_mul_ps(_mm256_set1_ps(116.0f), fy), _mm256_set1_ps(16.0f));
+    *a = _mm256_mul_ps(_mm256_set1_ps(500.0f), _mm256_sub_ps(fx, fy));
+    *lab_b = _mm256_mul_ps(_mm256_set1_ps(200.0f), _mm256_sub_ps(fy, fz));
+}
+
+static inline void lab_to_rgb_ps128(__m128 l, __m128 a, __m128 lab_b,
+                                    __m128 *r, __m128 *g, __m128 *b)
+{
+    __m128 fy = _mm_div_ps(_mm_add_ps(l, _mm_set1_ps(16.0f)), _mm_set1_ps(116.0f));
+    __m128 fx = _mm_add_ps(fy, _mm_div_ps(a, _mm_set1_ps(500.0f)));
+    __m128 fz = _mm_sub_ps(fy, _mm_div_ps(lab_b, _mm_set1_ps(200.0f)));
+
+    __m128 x = _mm_mul_ps(_mm_set1_ps(0.95047f), lab_to_xyz_component_ps128(fx));
+    __m128 y = lab_to_xyz_component_ps128(fy);
+    __m128 z = _mm_mul_ps(_mm_set1_ps(1.08883f), lab_to_xyz_component_ps128(fz));
+
+    __m128 red = mul_add_ps128(x, _mm_set1_ps(3.2404542f),
+                 mul_add_ps128(y, _mm_set1_ps(-1.5371385f),
+                               _mm_mul_ps(z, _mm_set1_ps(-0.4985314f))));
+    __m128 green = mul_add_ps128(x, _mm_set1_ps(-0.9692660f),
+                   mul_add_ps128(y, _mm_set1_ps(1.8760108f),
+                                 _mm_mul_ps(z, _mm_set1_ps(0.0415560f))));
+    __m128 blue = mul_add_ps128(x, _mm_set1_ps(0.0556434f),
+                  mul_add_ps128(y, _mm_set1_ps(-0.2040259f),
+                                _mm_mul_ps(z, _mm_set1_ps(1.0572252f))));
+
+    *r = linear_to_srgb_ps128(red);
+    *g = linear_to_srgb_ps128(green);
+    *b = linear_to_srgb_ps128(blue);
+}
+
+static inline void lab_to_rgb_ps256(__m256 l, __m256 a, __m256 lab_b,
+                                    __m256 *r, __m256 *g, __m256 *b)
+{
+    __m256 fy = _mm256_div_ps(_mm256_add_ps(l, _mm256_set1_ps(16.0f)),
+                              _mm256_set1_ps(116.0f));
+    __m256 fx = _mm256_add_ps(fy, _mm256_div_ps(a, _mm256_set1_ps(500.0f)));
+    __m256 fz = _mm256_sub_ps(fy, _mm256_div_ps(lab_b, _mm256_set1_ps(200.0f)));
+
+    __m256 x = _mm256_mul_ps(_mm256_set1_ps(0.95047f), lab_to_xyz_component_ps256(fx));
+    __m256 y = lab_to_xyz_component_ps256(fy);
+    __m256 z = _mm256_mul_ps(_mm256_set1_ps(1.08883f), lab_to_xyz_component_ps256(fz));
+
+    __m256 red = mul_add_ps256(x, _mm256_set1_ps(3.2404542f),
+                  mul_add_ps256(y, _mm256_set1_ps(-1.5371385f),
+                                _mm256_mul_ps(z, _mm256_set1_ps(-0.4985314f))));
+    __m256 green = mul_add_ps256(x, _mm256_set1_ps(-0.9692660f),
+                    mul_add_ps256(y, _mm256_set1_ps(1.8760108f),
+                                  _mm256_mul_ps(z, _mm256_set1_ps(0.0415560f))));
+    __m256 blue = mul_add_ps256(x, _mm256_set1_ps(0.0556434f),
+                   mul_add_ps256(y, _mm256_set1_ps(-0.2040259f),
+                                 _mm256_mul_ps(z, _mm256_set1_ps(1.0572252f))));
+
+    *r = linear_to_srgb_ps256(red);
+    *g = linear_to_srgb_ps256(green);
+    *b = linear_to_srgb_ps256(blue);
+}
+
+static inline void lch_blend_ps128(__m128 bg_r, __m128 bg_g, __m128 bg_b,
+                                   __m128 fg_r, __m128 fg_g, __m128 fg_b,
+                                   int use_l, int use_c, int use_h,
+                                   __m128 *out_r, __m128 *out_g, __m128 *out_b)
+{
+    __m128 bg_l, bg_a, bg_lab_b;
+    __m128 fg_l, fg_a, fg_lab_b;
+    rgb_to_lab_ps128(bg_r, bg_g, bg_b, &bg_l, &bg_a, &bg_lab_b);
+    rgb_to_lab_ps128(fg_r, fg_g, fg_b, &fg_l, &fg_a, &fg_lab_b);
+
+    __m128 out_l = use_l ? fg_l : bg_l;
+    __m128 out_a = bg_a;
+    __m128 out_lab_b = bg_lab_b;
+    __m128 bg_chroma = _mm_sqrt_ps(mul_add_ps128(bg_a, bg_a, _mm_mul_ps(bg_lab_b, bg_lab_b)));
+    __m128 fg_chroma = _mm_sqrt_ps(mul_add_ps128(fg_a, fg_a, _mm_mul_ps(fg_lab_b, fg_lab_b)));
+    __m128 zero = _mm_set1_ps(0.0f);
+
+    if (use_c && use_h) {
+        out_a = fg_a;
+        out_lab_b = fg_lab_b;
+    } else if (use_c) {
+        __m128 scale = _mm_div_ps(fg_chroma, bg_chroma);
+        __m128 mask = _mm_cmpgt_ps(bg_chroma, zero);
+        out_a = select_ps128(mask, _mm_mul_ps(bg_a, scale), fg_chroma);
+        out_lab_b = select_ps128(mask, _mm_mul_ps(bg_lab_b, scale), zero);
+    } else if (use_h) {
+        __m128 scale = _mm_div_ps(bg_chroma, fg_chroma);
+        __m128 mask = _mm_cmpgt_ps(fg_chroma, zero);
+        out_a = select_ps128(mask, _mm_mul_ps(fg_a, scale), bg_a);
+        out_lab_b = select_ps128(mask, _mm_mul_ps(fg_lab_b, scale), bg_lab_b);
+    }
+
+    lab_to_rgb_ps128(out_l, out_a, out_lab_b, out_r, out_g, out_b);
+}
+
+static inline void lch_blend_ps256(__m256 bg_r, __m256 bg_g, __m256 bg_b,
+                                   __m256 fg_r, __m256 fg_g, __m256 fg_b,
+                                   int use_l, int use_c, int use_h,
+                                   __m256 *out_r, __m256 *out_g, __m256 *out_b)
+{
+    __m256 bg_l, bg_a, bg_lab_b;
+    __m256 fg_l, fg_a, fg_lab_b;
+    rgb_to_lab_ps256(bg_r, bg_g, bg_b, &bg_l, &bg_a, &bg_lab_b);
+    rgb_to_lab_ps256(fg_r, fg_g, fg_b, &fg_l, &fg_a, &fg_lab_b);
+
+    __m256 out_l = use_l ? fg_l : bg_l;
+    __m256 out_a = bg_a;
+    __m256 out_lab_b = bg_lab_b;
+    __m256 bg_chroma = _mm256_sqrt_ps(
+        mul_add_ps256(bg_a, bg_a, _mm256_mul_ps(bg_lab_b, bg_lab_b))
+    );
+    __m256 fg_chroma = _mm256_sqrt_ps(
+        mul_add_ps256(fg_a, fg_a, _mm256_mul_ps(fg_lab_b, fg_lab_b))
+    );
+    __m256 zero = _mm256_set1_ps(0.0f);
+
+    if (use_c && use_h) {
+        out_a = fg_a;
+        out_lab_b = fg_lab_b;
+    } else if (use_c) {
+        __m256 scale = _mm256_div_ps(fg_chroma, bg_chroma);
+        __m256 mask = _mm256_cmp_ps(bg_chroma, zero, _CMP_GT_OQ);
+        out_a = select_ps256(mask, _mm256_mul_ps(bg_a, scale), fg_chroma);
+        out_lab_b = select_ps256(mask, _mm256_mul_ps(bg_lab_b, scale), zero);
+    } else if (use_h) {
+        __m256 scale = _mm256_div_ps(bg_chroma, fg_chroma);
+        __m256 mask = _mm256_cmp_ps(fg_chroma, zero, _CMP_GT_OQ);
+        out_a = select_ps256(mask, _mm256_mul_ps(fg_a, scale), bg_a);
+        out_lab_b = select_ps256(mask, _mm256_mul_ps(fg_lab_b, scale), bg_lab_b);
+    }
+
+    lab_to_rgb_ps256(out_l, out_a, out_lab_b, out_r, out_g, out_b);
+}
 #endif
 
 static inline PyObject *blend_rgb_mode_simd(PyObject *args,
@@ -4377,10 +4686,26 @@ static inline PyObject *blend_rgb_mode_simd(PyObject *args,
             __m256 bg_r, bg_g, bg_b, bg_a;
             __m256 fg_r, fg_g, fg_b, fg_a;
             __m256 comp_r, comp_g, comp_b;
-            load_rgb8(&background, index, &bg_r, &bg_g, &bg_b);
-            load_rgb8(&foreground, index, &fg_r, &fg_g, &fg_b);
-            bg_a = load_alpha8(&background, index);
-            fg_a = load_alpha8(&foreground, index);
+
+            if (background.is_uint8) {
+                load_rgb8_u8(background.u8, background.channels, index,
+                             &bg_r, &bg_g, &bg_b);
+                bg_a = load_alpha8_u8(background.u8, background.channels, index);
+            } else {
+                load_rgb8_f32(background.f32, background.channels, index,
+                              &bg_r, &bg_g, &bg_b);
+                bg_a = load_alpha8_f32(background.f32, background.channels, index);
+            }
+
+            if (foreground.is_uint8) {
+                load_rgb8_u8(foreground.u8, foreground.channels, index,
+                             &fg_r, &fg_g, &fg_b);
+                fg_a = load_alpha8_u8(foreground.u8, foreground.channels, index);
+            } else {
+                load_rgb8_f32(foreground.f32, foreground.channels, index,
+                              &fg_r, &fg_g, &fg_b);
+                fg_a = load_alpha8_f32(foreground.f32, foreground.channels, index);
+            }
 
             __m256 comp_alpha = _mm256_mul_ps(_mm256_min_ps(bg_a, fg_a), opacity256);
             __m256 new_alpha = mul_add_ps256(_mm256_sub_ps(one256, bg_a), comp_alpha, bg_a);
@@ -4395,8 +4720,21 @@ static inline PyObject *blend_rgb_mode_simd(PyObject *args,
                                          _mm256_mul_ps(bg_g, _mm256_sub_ps(one256, ratio)));
             __m256 out_b = mul_add_ps256(comp_b, ratio,
                                          _mm256_mul_ps(bg_b, _mm256_sub_ps(one256, ratio)));
-            store_rgb8(&output, index, out_r, out_g, out_b);
-            store_alpha8(&output, index, bg_a);
+            if (output.channels == 4) {
+                if (output.is_uint8) {
+                    store_rgba8_u8(&output, index, out_r, out_g, out_b, bg_a);
+                } else {
+                    store_rgba8_f32_from_unit_avx2(
+                        output.f32 + (index * output.channels),
+                        out_r,
+                        out_g,
+                        out_b,
+                        bg_a
+                    );
+                }
+            } else {
+                store_rgb8(&output, index, out_r, out_g, out_b);
+            }
         }
     }
 #endif
@@ -4407,10 +4745,26 @@ static inline PyObject *blend_rgb_mode_simd(PyObject *args,
             __m128 bg_r, bg_g, bg_b, bg_a;
             __m128 fg_r, fg_g, fg_b, fg_a;
             __m128 comp_r, comp_g, comp_b;
-            load_rgb4(&background, index, &bg_r, &bg_g, &bg_b);
-            load_rgb4(&foreground, index, &fg_r, &fg_g, &fg_b);
-            bg_a = load_alpha4(&background, index);
-            fg_a = load_alpha4(&foreground, index);
+
+            if (background.is_uint8) {
+                load_rgb4_u8(background.u8, background.channels, index,
+                             &bg_r, &bg_g, &bg_b);
+                bg_a = load_alpha4_u8(background.u8, background.channels, index);
+            } else {
+                load_rgb4_f32(background.f32, background.channels, index,
+                              &bg_r, &bg_g, &bg_b);
+                bg_a = load_alpha4_f32(background.f32, background.channels, index);
+            }
+
+            if (foreground.is_uint8) {
+                load_rgb4_u8(foreground.u8, foreground.channels, index,
+                             &fg_r, &fg_g, &fg_b);
+                fg_a = load_alpha4_u8(foreground.u8, foreground.channels, index);
+            } else {
+                load_rgb4_f32(foreground.f32, foreground.channels, index,
+                              &fg_r, &fg_g, &fg_b);
+                fg_a = load_alpha4_f32(foreground.f32, foreground.channels, index);
+            }
 
             __m128 comp_alpha = _mm_mul_ps(_mm_min_ps(bg_a, fg_a), opacity128);
             __m128 new_alpha = mul_add_ps128(_mm_sub_ps(one128, bg_a), comp_alpha, bg_a);
@@ -4425,8 +4779,21 @@ static inline PyObject *blend_rgb_mode_simd(PyObject *args,
                                          _mm_mul_ps(bg_g, _mm_sub_ps(one128, ratio)));
             __m128 out_b = mul_add_ps128(comp_b, ratio,
                                          _mm_mul_ps(bg_b, _mm_sub_ps(one128, ratio)));
-            store_rgb4(&output, index, out_r, out_g, out_b);
-            store_alpha4(&output, index, bg_a);
+            if (output.channels == 4) {
+                if (output.is_uint8) {
+                    store_rgba4_u8(&output, index, out_r, out_g, out_b, bg_a);
+                } else {
+                    store_rgba4_f32_from_unit_sse(
+                        output.f32 + (index * output.channels),
+                        out_r,
+                        out_g,
+                        out_b,
+                        bg_a
+                    );
+                }
+            } else {
+                store_rgb4(&output, index, out_r, out_g, out_b);
+            }
         }
     }
 #endif

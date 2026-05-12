@@ -425,6 +425,8 @@ class TestBlendModes(unittest.TestCase):
                         expected = reference_func(background, foreground, float(opacity))
                         if background_channels == 3:
                             expected = expected[:, :, :3]
+                        if background_dtype == np.uint8:
+                            expected = np.clip(np.rint(expected), 0.0, 255.0)
                         for kernel in available_kernels:
                             actual = simd_func(background, foreground, float(opacity), kernel)
                             context = (

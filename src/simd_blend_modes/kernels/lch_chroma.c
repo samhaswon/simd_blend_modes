@@ -10,16 +10,16 @@ static inline void lch_chroma_comp_ps128(__m128 bg_r, __m128 bg_g, __m128 bg_b,
                                          __m128 fg_r, __m128 fg_g, __m128 fg_b,
                                          __m128 *out_r, __m128 *out_g, __m128 *out_b)
 {
-    apply_rgb_comp_ps128(bg_r, bg_g, bg_b, fg_r, fg_g, fg_b,
-                         out_r, out_g, out_b, lch_chroma_comp);
+    lch_blend_ps128(bg_r, bg_g, bg_b, fg_r, fg_g, fg_b, 0, 1, 0,
+                    out_r, out_g, out_b);
 }
 
 static inline void lch_chroma_comp_ps256(__m256 bg_r, __m256 bg_g, __m256 bg_b,
                                          __m256 fg_r, __m256 fg_g, __m256 fg_b,
                                          __m256 *out_r, __m256 *out_g, __m256 *out_b)
 {
-    apply_rgb_comp_ps256(bg_r, bg_g, bg_b, fg_r, fg_g, fg_b,
-                         out_r, out_g, out_b, lch_chroma_comp);
+    lch_blend_ps256(bg_r, bg_g, bg_b, fg_r, fg_g, fg_b, 0, 1, 0,
+                    out_r, out_g, out_b);
 }
 #endif
 
