@@ -15,3 +15,6 @@
 - [ ] Burn
     - [ ] (Normal) Burn
     - [ ] Linear Burn
+- [ ] Exclusion
+- [ ] Vivid light
+- [ ] Pin light
