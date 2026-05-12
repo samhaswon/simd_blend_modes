@@ -109,8 +109,12 @@ static kernel_kind pick_kernel(const char *force_name) {
 #endif
     if (force_name) {
         if (strcmp(force_name, "scalar") == 0) return KERNEL_SCALAR;
-        if (strcmp(force_name, "sse42")  == 0) return KERNEL_SSE42;
-        if (strcmp(force_name, "avx2")   == 0) return KERNEL_AVX2;
+        if (strcmp(force_name, "sse42")  == 0) {
+            return cpu_supports_sse42() ? KERNEL_SSE42 : KERNEL_SCALAR;
+        }
+        if (strcmp(force_name, "avx2")   == 0) {
+            return (cpu_supports_avx2() && os_supports_avx()) ? KERNEL_AVX2 : KERNEL_SCALAR;
+        }
         if (strcmp(force_name, "auto")   == 0) {/* fall through */}
     }
     /* Auto: prefer AVX2, then SSE4.2, else scalar */
@@ -3702,6 +3706,767 @@ static inline PyObject *blend_normal_mode(PyObject *args) {
         }
     }
     NPY_END_ALLOW_THREADS
+    Py_XDECREF(kernel_hold);
+    release_blend_inputs(&background, &foreground);
+    return (PyObject *)output.array;
+}
+
+typedef struct {
+    float r;
+    float g;
+    float b;
+} rgb_triplet;
+
+typedef struct {
+    float h;
+    float s;
+    float v;
+} hsv_triplet;
+
+typedef struct {
+    float h;
+    float s;
+    float l;
+} hsl_triplet;
+
+typedef struct {
+    float l;
+    float a;
+    float b;
+} lab_triplet;
+
+typedef struct {
+    float l;
+    float c;
+    float h;
+} lch_triplet;
+
+typedef rgb_triplet (*blend_rgb_comp_fn)(rgb_triplet bg, rgb_triplet fg);
+
+#if SIMD_BLEND_MODES_X86
+typedef void (*blend_rgb_comp_fn128)(__m128 bg_r, __m128 bg_g, __m128 bg_b,
+                                     __m128 fg_r, __m128 fg_g, __m128 fg_b,
+                                     __m128 *out_r, __m128 *out_g, __m128 *out_b);
+typedef void (*blend_rgb_comp_fn256)(__m256 bg_r, __m256 bg_g, __m256 bg_b,
+                                     __m256 fg_r, __m256 fg_g, __m256 fg_b,
+                                     __m256 *out_r, __m256 *out_g, __m256 *out_b);
+#else
+typedef void *blend_rgb_comp_fn128;
+typedef void *blend_rgb_comp_fn256;
+#endif
+
+#if SIMD_BLEND_MODES_X86
+#define SIMD_BLEND_MODES_RGB_SIMD_ARGS(comp_sse, comp_avx) (comp_sse), (comp_avx)
+#else
+#define SIMD_BLEND_MODES_RGB_SIMD_ARGS(comp_sse, comp_avx) NULL, NULL
+#endif
+
+static inline float rgb_max3(float a, float b, float c)
+{
+    return fmaxf(a, fmaxf(b, c));
+}
+
+static inline float rgb_min3(float a, float b, float c)
+{
+    return fminf(a, fminf(b, c));
+}
+
+static inline hsv_triplet rgb_to_hsv_triplet(rgb_triplet rgb)
+{
+    float max_channel = rgb_max3(rgb.r, rgb.g, rgb.b);
+    float min_channel = rgb_min3(rgb.r, rgb.g, rgb.b);
+    float chroma = max_channel - min_channel;
+    float hue = 0.0f;
+    float saturation = 0.0f;
+
+    if (chroma != 0.0f) {
+        if (max_channel == rgb.r) {
+            hue = fmodf((rgb.g - rgb.b) / chroma, 6.0f);
+        }
+        if (max_channel == rgb.g) {
+            hue = ((rgb.b - rgb.r) / chroma) + 2.0f;
+        }
+        if (max_channel == rgb.b) {
+            hue = ((rgb.r - rgb.g) / chroma) + 4.0f;
+        }
+        hue /= 6.0f;
+        if (hue < 0.0f) {
+            hue += 1.0f;
+        }
+    }
+
+    if (max_channel != 0.0f) {
+        saturation = chroma / max_channel;
+    }
+
+    hsv_triplet hsv = {hue, saturation, max_channel};
+    return hsv;
+}
+
+static inline rgb_triplet hsv_to_rgb_triplet(hsv_triplet hsv)
+{
+    float hue = fmodf(hsv.h, 1.0f);
+    if (hue < 0.0f) {
+        hue += 1.0f;
+    }
+    hue *= 6.0f;
+
+    float saturation = clamp01(hsv.s);
+    float value = clamp01(hsv.v);
+    float chroma = value * saturation;
+    float x_value = chroma * (1.0f - fabsf(fmodf(hue, 2.0f) - 1.0f));
+    float match = value - chroma;
+    rgb_triplet rgb = {0.0f, 0.0f, 0.0f};
+
+    if (hue < 1.0f) {
+        rgb.r = chroma;
+        rgb.g = x_value;
+    } else if (hue < 2.0f) {
+        rgb.r = x_value;
+        rgb.g = chroma;
+    } else if (hue < 3.0f) {
+        rgb.g = chroma;
+        rgb.b = x_value;
+    } else if (hue < 4.0f) {
+        rgb.g = x_value;
+        rgb.b = chroma;
+    } else if (hue < 5.0f) {
+        rgb.r = x_value;
+        rgb.b = chroma;
+    } else {
+        rgb.r = chroma;
+        rgb.b = x_value;
+    }
+
+    rgb.r += match;
+    rgb.g += match;
+    rgb.b += match;
+    return rgb;
+}
+
+static inline hsl_triplet rgb_to_hsl_triplet(rgb_triplet rgb)
+{
+    float max_channel = rgb_max3(rgb.r, rgb.g, rgb.b);
+    float min_channel = rgb_min3(rgb.r, rgb.g, rgb.b);
+    float lightness = (max_channel + min_channel) * 0.5f;
+    float chroma = max_channel - min_channel;
+    float saturation = 0.0f;
+    hsv_triplet hsv = rgb_to_hsv_triplet(rgb);
+
+    if (chroma != 0.0f) {
+        saturation = chroma / (1.0f - fabsf(2.0f * lightness - 1.0f));
+    }
+
+    hsl_triplet hsl = {hsv.h, saturation, lightness};
+    return hsl;
+}
+
+static inline rgb_triplet hsl_to_rgb_triplet(hsl_triplet hsl)
+{
+    float saturation = clamp01(hsl.s);
+    float lightness = clamp01(hsl.l);
+    float chroma = (1.0f - fabsf(2.0f * lightness - 1.0f)) * saturation;
+    float value = lightness + chroma * 0.5f;
+    float hsv_saturation = value == 0.0f ? 0.0f : chroma / value;
+    hsv_triplet hsv = {hsl.h, hsv_saturation, value};
+    return hsv_to_rgb_triplet(hsv);
+}
+
+static inline float srgb_to_linear_unit(float value)
+{
+    if (value <= 0.04045f) {
+        return value / 12.92f;
+    }
+    return powf((value + 0.055f) / 1.055f, 2.4f);
+}
+
+static inline float linear_to_srgb_unit(float value)
+{
+    value = clamp01(value);
+    if (value <= 0.0031308f) {
+        return value * 12.92f;
+    }
+    return 1.055f * powf(value, 1.0f / 2.4f) - 0.055f;
+}
+
+static inline float xyz_to_lab_component(float value)
+{
+    const float epsilon = 216.0f / 24389.0f;
+    const float kappa = 24389.0f / 27.0f;
+    if (value > epsilon) {
+        return cbrtf(value);
+    }
+    return (kappa * value + 16.0f) / 116.0f;
+}
+
+static inline float lab_to_xyz_component(float value)
+{
+    const float epsilon = 216.0f / 24389.0f;
+    const float kappa = 24389.0f / 27.0f;
+    float value_cubed = value * value * value;
+    if (value_cubed > epsilon) {
+        return value_cubed;
+    }
+    return (116.0f * value - 16.0f) / kappa;
+}
+
+static inline lab_triplet rgb_to_lab_triplet(rgb_triplet rgb)
+{
+    float red = srgb_to_linear_unit(rgb.r);
+    float green = srgb_to_linear_unit(rgb.g);
+    float blue = srgb_to_linear_unit(rgb.b);
+
+    float x = red * 0.4124564f + green * 0.3575761f + blue * 0.1804375f;
+    float y = red * 0.2126729f + green * 0.7151522f + blue * 0.0721750f;
+    float z = red * 0.0193339f + green * 0.1191920f + blue * 0.9503041f;
+
+    float fx = xyz_to_lab_component(x / 0.95047f);
+    float fy = xyz_to_lab_component(y);
+    float fz = xyz_to_lab_component(z / 1.08883f);
+
+    lab_triplet lab = {
+        116.0f * fy - 16.0f,
+        500.0f * (fx - fy),
+        200.0f * (fy - fz),
+    };
+    return lab;
+}
+
+static inline rgb_triplet lab_to_rgb_triplet(lab_triplet lab)
+{
+    float fy = (lab.l + 16.0f) / 116.0f;
+    float fx = fy + lab.a / 500.0f;
+    float fz = fy - lab.b / 200.0f;
+
+    float x = 0.95047f * lab_to_xyz_component(fx);
+    float y = lab_to_xyz_component(fy);
+    float z = 1.08883f * lab_to_xyz_component(fz);
+
+    float red = x * 3.2404542f + y * -1.5371385f + z * -0.4985314f;
+    float green = x * -0.9692660f + y * 1.8760108f + z * 0.0415560f;
+    float blue = x * 0.0556434f + y * -0.2040259f + z * 1.0572252f;
+
+    rgb_triplet rgb = {
+        linear_to_srgb_unit(red),
+        linear_to_srgb_unit(green),
+        linear_to_srgb_unit(blue),
+    };
+    return rgb;
+}
+
+static inline lch_triplet lab_to_lch_triplet(lab_triplet lab)
+{
+    lch_triplet lch = {
+        lab.l,
+        hypotf(lab.a, lab.b),
+        atan2f(lab.b, lab.a),
+    };
+    return lch;
+}
+
+static inline lab_triplet lch_to_lab_triplet(lch_triplet lch)
+{
+    lab_triplet lab = {
+        lch.l,
+        lch.c * cosf(lch.h),
+        lch.c * sinf(lch.h),
+    };
+    return lab;
+}
+
+static inline rgb_triplet lch_blend_triplet(rgb_triplet bg, rgb_triplet fg,
+                                            int use_l, int use_c, int use_h)
+{
+    lch_triplet bg_lch = lab_to_lch_triplet(rgb_to_lab_triplet(bg));
+    lch_triplet fg_lch = lab_to_lch_triplet(rgb_to_lab_triplet(fg));
+    lch_triplet out_lch = bg_lch;
+
+    if (use_l) {
+        out_lch.l = fg_lch.l;
+    }
+    if (use_c) {
+        out_lch.c = fg_lch.c;
+    }
+    if (use_h && fg_lch.c > 0.0f) {
+        out_lch.h = fg_lch.h;
+    }
+
+    return lab_to_rgb_triplet(lch_to_lab_triplet(out_lch));
+}
+
+static inline float vivid_light_channel(float bg, float fg)
+{
+    if (fg < 0.5f) {
+        float burn_layer = 2.0f * fg;
+        if (burn_layer == 0.0f) {
+            return bg == 1.0f ? 1.0f : 0.0f;
+        }
+        return 1.0f - fminf(1.0f, (1.0f - bg) / burn_layer);
+    }
+
+    float dodge_layer = 2.0f * (fg - 0.5f);
+    if (dodge_layer == 1.0f) {
+        return 1.0f;
+    }
+    return fminf(1.0f, bg / (1.0f - dodge_layer));
+}
+
+#if SIMD_BLEND_MODES_X86
+static inline void apply_rgb_comp_ps128(__m128 bg_r, __m128 bg_g, __m128 bg_b,
+                                        __m128 fg_r, __m128 fg_g, __m128 fg_b,
+                                        __m128 *out_r, __m128 *out_g, __m128 *out_b,
+                                        blend_rgb_comp_fn comp)
+{
+    float br[4], bgc[4], bb[4], fr[4], fg[4], fb[4];
+    float rr[4], rg[4], rb[4];
+    _mm_storeu_ps(br, bg_r);
+    _mm_storeu_ps(bgc, bg_g);
+    _mm_storeu_ps(bb, bg_b);
+    _mm_storeu_ps(fr, fg_r);
+    _mm_storeu_ps(fg, fg_g);
+    _mm_storeu_ps(fb, fg_b);
+
+    for (int i = 0; i < 4; ++i) {
+        rgb_triplet bg = {br[i], bgc[i], bb[i]};
+        rgb_triplet layer = {fr[i], fg[i], fb[i]};
+        rgb_triplet out = comp(bg, layer);
+        rr[i] = out.r;
+        rg[i] = out.g;
+        rb[i] = out.b;
+    }
+
+    *out_r = _mm_loadu_ps(rr);
+    *out_g = _mm_loadu_ps(rg);
+    *out_b = _mm_loadu_ps(rb);
+}
+
+static inline void apply_rgb_comp_ps256(__m256 bg_r, __m256 bg_g, __m256 bg_b,
+                                        __m256 fg_r, __m256 fg_g, __m256 fg_b,
+                                        __m256 *out_r, __m256 *out_g, __m256 *out_b,
+                                        blend_rgb_comp_fn comp)
+{
+    float br[8], bgc[8], bb[8], fr[8], fg[8], fb[8];
+    float rr[8], rg[8], rb[8];
+    _mm256_storeu_ps(br, bg_r);
+    _mm256_storeu_ps(bgc, bg_g);
+    _mm256_storeu_ps(bb, bg_b);
+    _mm256_storeu_ps(fr, fg_r);
+    _mm256_storeu_ps(fg, fg_g);
+    _mm256_storeu_ps(fb, fg_b);
+
+    for (int i = 0; i < 8; ++i) {
+        rgb_triplet bg = {br[i], bgc[i], bb[i]};
+        rgb_triplet layer = {fr[i], fg[i], fb[i]};
+        rgb_triplet out = comp(bg, layer);
+        rr[i] = out.r;
+        rg[i] = out.g;
+        rb[i] = out.b;
+    }
+
+    *out_r = _mm256_loadu_ps(rr);
+    *out_g = _mm256_loadu_ps(rg);
+    *out_b = _mm256_loadu_ps(rb);
+}
+
+static inline __m128 select_ps128(__m128 mask, __m128 if_true, __m128 if_false)
+{
+    return _mm_blendv_ps(if_false, if_true, mask);
+}
+
+static inline __m256 select_ps256(__m256 mask, __m256 if_true, __m256 if_false)
+{
+    return _mm256_blendv_ps(if_false, if_true, mask);
+}
+
+static inline __m128 floor_ps128(__m128 value)
+{
+    return _mm_floor_ps(value);
+}
+
+static inline __m256 floor_ps256(__m256 value)
+{
+    return _mm256_floor_ps(value);
+}
+
+static inline __m128 mod6_ps128(__m128 value)
+{
+    __m128 six = _mm_set1_ps(6.0f);
+    return _mm_sub_ps(value, _mm_mul_ps(floor_ps128(_mm_div_ps(value, six)), six));
+}
+
+static inline __m256 mod6_ps256(__m256 value)
+{
+    __m256 six = _mm256_set1_ps(6.0f);
+    return _mm256_sub_ps(value,
+                         _mm256_mul_ps(floor_ps256(_mm256_div_ps(value, six)), six));
+}
+
+static inline void rgb_to_hsv_ps128(__m128 r, __m128 g, __m128 b,
+                                    __m128 *h, __m128 *s, __m128 *v)
+{
+    __m128 zero = _mm_set1_ps(0.0f);
+    __m128 one = _mm_set1_ps(1.0f);
+    __m128 max_c = _mm_max_ps(r, _mm_max_ps(g, b));
+    __m128 min_c = _mm_min_ps(r, _mm_min_ps(g, b));
+    __m128 chroma = _mm_sub_ps(max_c, min_c);
+    __m128 chroma_nonzero = _mm_cmpneq_ps(chroma, zero);
+
+    __m128 red_hue = mod6_ps128(_mm_div_ps(_mm_sub_ps(g, b), chroma));
+    __m128 green_hue = _mm_add_ps(_mm_div_ps(_mm_sub_ps(b, r), chroma),
+                                  _mm_set1_ps(2.0f));
+    __m128 blue_hue = _mm_add_ps(_mm_div_ps(_mm_sub_ps(r, g), chroma),
+                                 _mm_set1_ps(4.0f));
+    __m128 hue = zero;
+    hue = select_ps128(_mm_and_ps(_mm_cmpeq_ps(max_c, r), chroma_nonzero), red_hue, hue);
+    hue = select_ps128(_mm_and_ps(_mm_cmpeq_ps(max_c, g), chroma_nonzero), green_hue, hue);
+    hue = select_ps128(_mm_and_ps(_mm_cmpeq_ps(max_c, b), chroma_nonzero), blue_hue, hue);
+    hue = _mm_div_ps(hue, _mm_set1_ps(6.0f));
+
+    __m128 value_nonzero = _mm_cmpneq_ps(max_c, zero);
+    __m128 sat = select_ps128(value_nonzero, _mm_div_ps(chroma, max_c), zero);
+    *h = hue;
+    *s = sat;
+    *v = max_c;
+    (void)one;
+}
+
+static inline void rgb_to_hsv_ps256(__m256 r, __m256 g, __m256 b,
+                                    __m256 *h, __m256 *s, __m256 *v)
+{
+    __m256 zero = _mm256_set1_ps(0.0f);
+    __m256 max_c = _mm256_max_ps(r, _mm256_max_ps(g, b));
+    __m256 min_c = _mm256_min_ps(r, _mm256_min_ps(g, b));
+    __m256 chroma = _mm256_sub_ps(max_c, min_c);
+    __m256 chroma_nonzero = _mm256_cmp_ps(chroma, zero, _CMP_NEQ_OQ);
+
+    __m256 red_hue = mod6_ps256(_mm256_div_ps(_mm256_sub_ps(g, b), chroma));
+    __m256 green_hue = _mm256_add_ps(_mm256_div_ps(_mm256_sub_ps(b, r), chroma),
+                                     _mm256_set1_ps(2.0f));
+    __m256 blue_hue = _mm256_add_ps(_mm256_div_ps(_mm256_sub_ps(r, g), chroma),
+                                    _mm256_set1_ps(4.0f));
+    __m256 hue = zero;
+    hue = select_ps256(_mm256_and_ps(_mm256_cmp_ps(max_c, r, _CMP_EQ_OQ), chroma_nonzero),
+                       red_hue, hue);
+    hue = select_ps256(_mm256_and_ps(_mm256_cmp_ps(max_c, g, _CMP_EQ_OQ), chroma_nonzero),
+                       green_hue, hue);
+    hue = select_ps256(_mm256_and_ps(_mm256_cmp_ps(max_c, b, _CMP_EQ_OQ), chroma_nonzero),
+                       blue_hue, hue);
+    hue = _mm256_div_ps(hue, _mm256_set1_ps(6.0f));
+
+    __m256 value_nonzero = _mm256_cmp_ps(max_c, zero, _CMP_NEQ_OQ);
+    __m256 sat = select_ps256(value_nonzero, _mm256_div_ps(chroma, max_c), zero);
+    *h = hue;
+    *s = sat;
+    *v = max_c;
+}
+
+static inline void hsv_to_rgb_ps128(__m128 h, __m128 s, __m128 v,
+                                    __m128 *r, __m128 *g, __m128 *b)
+{
+    __m128 zero = _mm_set1_ps(0.0f);
+    __m128 one = _mm_set1_ps(1.0f);
+    __m128 hue = _mm_mul_ps(_mm_sub_ps(h, floor_ps128(h)), _mm_set1_ps(6.0f));
+    __m128 saturation = clamp01_ps128(s);
+    __m128 value = clamp01_ps128(v);
+    __m128 chroma = _mm_mul_ps(value, saturation);
+    __m128 hue_mod2 = _mm_sub_ps(hue, _mm_mul_ps(floor_ps128(_mm_mul_ps(hue,
+                                      _mm_set1_ps(0.5f))), _mm_set1_ps(2.0f)));
+    __m128 x_value = _mm_mul_ps(chroma, _mm_sub_ps(one,
+                                  _mm_andnot_ps(_mm_set1_ps(-0.0f),
+                                                _mm_sub_ps(hue_mod2, one))));
+    __m128 match = _mm_sub_ps(value, chroma);
+    __m128 rp = zero;
+    __m128 gp = zero;
+    __m128 bp = zero;
+    __m128 h1 = _mm_cmplt_ps(hue, _mm_set1_ps(1.0f));
+    __m128 h2 = _mm_and_ps(_mm_cmpge_ps(hue, _mm_set1_ps(1.0f)),
+                           _mm_cmplt_ps(hue, _mm_set1_ps(2.0f)));
+    __m128 h3 = _mm_and_ps(_mm_cmpge_ps(hue, _mm_set1_ps(2.0f)),
+                           _mm_cmplt_ps(hue, _mm_set1_ps(3.0f)));
+    __m128 h4 = _mm_and_ps(_mm_cmpge_ps(hue, _mm_set1_ps(3.0f)),
+                           _mm_cmplt_ps(hue, _mm_set1_ps(4.0f)));
+    __m128 h5 = _mm_and_ps(_mm_cmpge_ps(hue, _mm_set1_ps(4.0f)),
+                           _mm_cmplt_ps(hue, _mm_set1_ps(5.0f)));
+    __m128 h6 = _mm_cmpge_ps(hue, _mm_set1_ps(5.0f));
+    rp = select_ps128(h1, chroma, rp);
+    gp = select_ps128(h1, x_value, gp);
+    rp = select_ps128(h2, x_value, rp);
+    gp = select_ps128(h2, chroma, gp);
+    gp = select_ps128(h3, chroma, gp);
+    bp = select_ps128(h3, x_value, bp);
+    gp = select_ps128(h4, x_value, gp);
+    bp = select_ps128(h4, chroma, bp);
+    rp = select_ps128(h5, x_value, rp);
+    bp = select_ps128(h5, chroma, bp);
+    rp = select_ps128(h6, chroma, rp);
+    bp = select_ps128(h6, x_value, bp);
+    *r = _mm_add_ps(rp, match);
+    *g = _mm_add_ps(gp, match);
+    *b = _mm_add_ps(bp, match);
+}
+
+static inline void hsv_to_rgb_ps256(__m256 h, __m256 s, __m256 v,
+                                    __m256 *r, __m256 *g, __m256 *b)
+{
+    __m256 zero = _mm256_set1_ps(0.0f);
+    __m256 one = _mm256_set1_ps(1.0f);
+    __m256 hue = _mm256_mul_ps(_mm256_sub_ps(h, floor_ps256(h)), _mm256_set1_ps(6.0f));
+    __m256 saturation = clamp01_ps(s);
+    __m256 value = clamp01_ps(v);
+    __m256 chroma = _mm256_mul_ps(value, saturation);
+    __m256 hue_mod2 = _mm256_sub_ps(hue, _mm256_mul_ps(floor_ps256(_mm256_mul_ps(hue,
+                                       _mm256_set1_ps(0.5f))), _mm256_set1_ps(2.0f)));
+    __m256 x_value = _mm256_mul_ps(chroma, _mm256_sub_ps(one,
+                                   _mm256_andnot_ps(_mm256_set1_ps(-0.0f),
+                                                    _mm256_sub_ps(hue_mod2, one))));
+    __m256 match = _mm256_sub_ps(value, chroma);
+    __m256 rp = zero;
+    __m256 gp = zero;
+    __m256 bp = zero;
+    __m256 h1 = _mm256_cmp_ps(hue, _mm256_set1_ps(1.0f), _CMP_LT_OQ);
+    __m256 h2 = _mm256_and_ps(_mm256_cmp_ps(hue, _mm256_set1_ps(1.0f), _CMP_GE_OQ),
+                              _mm256_cmp_ps(hue, _mm256_set1_ps(2.0f), _CMP_LT_OQ));
+    __m256 h3 = _mm256_and_ps(_mm256_cmp_ps(hue, _mm256_set1_ps(2.0f), _CMP_GE_OQ),
+                              _mm256_cmp_ps(hue, _mm256_set1_ps(3.0f), _CMP_LT_OQ));
+    __m256 h4 = _mm256_and_ps(_mm256_cmp_ps(hue, _mm256_set1_ps(3.0f), _CMP_GE_OQ),
+                              _mm256_cmp_ps(hue, _mm256_set1_ps(4.0f), _CMP_LT_OQ));
+    __m256 h5 = _mm256_and_ps(_mm256_cmp_ps(hue, _mm256_set1_ps(4.0f), _CMP_GE_OQ),
+                              _mm256_cmp_ps(hue, _mm256_set1_ps(5.0f), _CMP_LT_OQ));
+    __m256 h6 = _mm256_cmp_ps(hue, _mm256_set1_ps(5.0f), _CMP_GE_OQ);
+    rp = select_ps256(h1, chroma, rp);
+    gp = select_ps256(h1, x_value, gp);
+    rp = select_ps256(h2, x_value, rp);
+    gp = select_ps256(h2, chroma, gp);
+    gp = select_ps256(h3, chroma, gp);
+    bp = select_ps256(h3, x_value, bp);
+    gp = select_ps256(h4, x_value, gp);
+    bp = select_ps256(h4, chroma, bp);
+    rp = select_ps256(h5, x_value, rp);
+    bp = select_ps256(h5, chroma, bp);
+    rp = select_ps256(h6, chroma, rp);
+    bp = select_ps256(h6, x_value, bp);
+    *r = _mm256_add_ps(rp, match);
+    *g = _mm256_add_ps(gp, match);
+    *b = _mm256_add_ps(bp, match);
+}
+
+static inline void rgb_to_hsl_ps128(__m128 r, __m128 g, __m128 b,
+                                    __m128 *h, __m128 *s, __m128 *l)
+{
+    __m128 max_c = _mm_max_ps(r, _mm_max_ps(g, b));
+    __m128 min_c = _mm_min_ps(r, _mm_min_ps(g, b));
+    __m128 chroma = _mm_sub_ps(max_c, min_c);
+    __m128 lightness = _mm_mul_ps(_mm_add_ps(max_c, min_c), _mm_set1_ps(0.5f));
+    __m128 hue, hsv_s, hsv_v;
+    rgb_to_hsv_ps128(r, g, b, &hue, &hsv_s, &hsv_v);
+    __m128 denom = _mm_sub_ps(_mm_set1_ps(1.0f),
+                              _mm_andnot_ps(_mm_set1_ps(-0.0f),
+                                            _mm_sub_ps(_mm_add_ps(lightness, lightness),
+                                                       _mm_set1_ps(1.0f))));
+    __m128 sat = select_ps128(_mm_cmpneq_ps(chroma, _mm_set1_ps(0.0f)),
+                              _mm_div_ps(chroma, denom), _mm_set1_ps(0.0f));
+    *h = hue;
+    *s = sat;
+    *l = lightness;
+}
+
+static inline void rgb_to_hsl_ps256(__m256 r, __m256 g, __m256 b,
+                                    __m256 *h, __m256 *s, __m256 *l)
+{
+    __m256 max_c = _mm256_max_ps(r, _mm256_max_ps(g, b));
+    __m256 min_c = _mm256_min_ps(r, _mm256_min_ps(g, b));
+    __m256 chroma = _mm256_sub_ps(max_c, min_c);
+    __m256 lightness = _mm256_mul_ps(_mm256_add_ps(max_c, min_c), _mm256_set1_ps(0.5f));
+    __m256 hue, hsv_s, hsv_v;
+    rgb_to_hsv_ps256(r, g, b, &hue, &hsv_s, &hsv_v);
+    __m256 denom = _mm256_sub_ps(_mm256_set1_ps(1.0f),
+                                 _mm256_andnot_ps(_mm256_set1_ps(-0.0f),
+                                                  _mm256_sub_ps(_mm256_add_ps(lightness, lightness),
+                                                                _mm256_set1_ps(1.0f))));
+    __m256 sat = select_ps256(_mm256_cmp_ps(chroma, _mm256_set1_ps(0.0f), _CMP_NEQ_OQ),
+                              _mm256_div_ps(chroma, denom), _mm256_set1_ps(0.0f));
+    *h = hue;
+    *s = sat;
+    *l = lightness;
+}
+
+static inline void hsl_to_rgb_ps128(__m128 h, __m128 s, __m128 l,
+                                    __m128 *r, __m128 *g, __m128 *b)
+{
+    __m128 saturation = clamp01_ps128(s);
+    __m128 lightness = clamp01_ps128(l);
+    __m128 chroma = _mm_mul_ps(
+        _mm_sub_ps(_mm_set1_ps(1.0f), _mm_andnot_ps(_mm_set1_ps(-0.0f),
+                   _mm_sub_ps(_mm_add_ps(lightness, lightness), _mm_set1_ps(1.0f)))),
+        saturation
+    );
+    __m128 value = _mm_add_ps(lightness, _mm_mul_ps(chroma, _mm_set1_ps(0.5f)));
+    __m128 hsv_s = select_ps128(_mm_cmpneq_ps(value, _mm_set1_ps(0.0f)),
+                                _mm_div_ps(chroma, value), _mm_set1_ps(0.0f));
+    hsv_to_rgb_ps128(h, hsv_s, value, r, g, b);
+}
+
+static inline void hsl_to_rgb_ps256(__m256 h, __m256 s, __m256 l,
+                                    __m256 *r, __m256 *g, __m256 *b)
+{
+    __m256 saturation = clamp01_ps(s);
+    __m256 lightness = clamp01_ps(l);
+    __m256 chroma = _mm256_mul_ps(
+        _mm256_sub_ps(_mm256_set1_ps(1.0f), _mm256_andnot_ps(_mm256_set1_ps(-0.0f),
+                     _mm256_sub_ps(_mm256_add_ps(lightness, lightness),
+                                   _mm256_set1_ps(1.0f)))),
+        saturation
+    );
+    __m256 value = _mm256_add_ps(lightness, _mm256_mul_ps(chroma, _mm256_set1_ps(0.5f)));
+    __m256 hsv_s = select_ps256(_mm256_cmp_ps(value, _mm256_set1_ps(0.0f), _CMP_NEQ_OQ),
+                                _mm256_div_ps(chroma, value), _mm256_set1_ps(0.0f));
+    hsv_to_rgb_ps256(h, hsv_s, value, r, g, b);
+}
+#endif
+
+static inline PyObject *blend_rgb_mode_simd(PyObject *args,
+                                            blend_rgb_comp_fn comp_scalar,
+                                            blend_rgb_comp_fn128 comp_sse,
+                                            blend_rgb_comp_fn256 comp_avx)
+{
+    BlendArray background = {0};
+    BlendArray foreground = {0};
+    float opacity = 0.0f;
+    npy_intp height = 0;
+    npy_intp width = 0;
+    const char *kernel_name = NULL;
+    PyObject *kernel_hold = NULL;
+
+    if (!parse_blend_inputs(args, &background, &foreground, &opacity, &height, &width,
+                            &kernel_name, &kernel_hold)) {
+        return NULL;
+    }
+
+    BlendOutput output = {0};
+    if (opacity <= 0.0f) {
+        if (!copy_background(&background, &output, height, width)) {
+            Py_XDECREF(kernel_hold);
+            release_blend_inputs(&background, &foreground);
+            return NULL;
+        }
+        Py_XDECREF(kernel_hold);
+        release_blend_inputs(&background, &foreground);
+        return (PyObject *)output.array;
+    }
+
+    if (!alloc_output(&background, height, width, &output)) {
+        Py_XDECREF(kernel_hold);
+        release_blend_inputs(&background, &foreground);
+        return NULL;
+    }
+
+    kernel_kind kernel = pick_kernel(kernel_name);
+    npy_intp pixels = height * width;
+    npy_intp index = 0;
+
+    NPY_BEGIN_ALLOW_THREADS
+#if SIMD_BLEND_MODES_X86
+    const __m128 one128 = _mm_set1_ps(1.0f);
+    const __m128 opacity128 = _mm_set1_ps(opacity);
+    const __m256 one256 = _mm256_set1_ps(1.0f);
+    const __m256 opacity256 = _mm256_set1_ps(opacity);
+
+#if defined(__AVX2__)
+    if (kernel == KERNEL_AVX2 && comp_avx) {
+        for (; index + 7 < pixels; index += 8) {
+            __m256 bg_r, bg_g, bg_b, bg_a;
+            __m256 fg_r, fg_g, fg_b, fg_a;
+            __m256 comp_r, comp_g, comp_b;
+            load_rgb8(&background, index, &bg_r, &bg_g, &bg_b);
+            load_rgb8(&foreground, index, &fg_r, &fg_g, &fg_b);
+            bg_a = load_alpha8(&background, index);
+            fg_a = load_alpha8(&foreground, index);
+
+            __m256 comp_alpha = _mm256_mul_ps(_mm256_min_ps(bg_a, fg_a), opacity256);
+            __m256 new_alpha = mul_add_ps256(_mm256_sub_ps(one256, bg_a), comp_alpha, bg_a);
+            __m256 ratio = _mm256_div_ps(comp_alpha, new_alpha);
+            __m256 mask = _mm256_cmp_ps(new_alpha, _mm256_set1_ps(0.0f), _CMP_GT_OQ);
+            ratio = _mm256_blendv_ps(_mm256_set1_ps(0.0f), ratio, mask);
+
+            comp_avx(bg_r, bg_g, bg_b, fg_r, fg_g, fg_b, &comp_r, &comp_g, &comp_b);
+            __m256 out_r = mul_add_ps256(comp_r, ratio,
+                                         _mm256_mul_ps(bg_r, _mm256_sub_ps(one256, ratio)));
+            __m256 out_g = mul_add_ps256(comp_g, ratio,
+                                         _mm256_mul_ps(bg_g, _mm256_sub_ps(one256, ratio)));
+            __m256 out_b = mul_add_ps256(comp_b, ratio,
+                                         _mm256_mul_ps(bg_b, _mm256_sub_ps(one256, ratio)));
+            store_rgb8(&output, index, out_r, out_g, out_b);
+            store_alpha8(&output, index, bg_a);
+        }
+    }
+#endif
+
+#if defined(__SSE4_1__)
+    if ((kernel == KERNEL_SSE42 || kernel == KERNEL_AVX2) && comp_sse) {
+        for (; index + 3 < pixels; index += 4) {
+            __m128 bg_r, bg_g, bg_b, bg_a;
+            __m128 fg_r, fg_g, fg_b, fg_a;
+            __m128 comp_r, comp_g, comp_b;
+            load_rgb4(&background, index, &bg_r, &bg_g, &bg_b);
+            load_rgb4(&foreground, index, &fg_r, &fg_g, &fg_b);
+            bg_a = load_alpha4(&background, index);
+            fg_a = load_alpha4(&foreground, index);
+
+            __m128 comp_alpha = _mm_mul_ps(_mm_min_ps(bg_a, fg_a), opacity128);
+            __m128 new_alpha = mul_add_ps128(_mm_sub_ps(one128, bg_a), comp_alpha, bg_a);
+            __m128 ratio = _mm_div_ps(comp_alpha, new_alpha);
+            __m128 mask = _mm_cmpgt_ps(new_alpha, _mm_set1_ps(0.0f));
+            ratio = _mm_blendv_ps(_mm_set1_ps(0.0f), ratio, mask);
+
+            comp_sse(bg_r, bg_g, bg_b, fg_r, fg_g, fg_b, &comp_r, &comp_g, &comp_b);
+            __m128 out_r = mul_add_ps128(comp_r, ratio,
+                                         _mm_mul_ps(bg_r, _mm_sub_ps(one128, ratio)));
+            __m128 out_g = mul_add_ps128(comp_g, ratio,
+                                         _mm_mul_ps(bg_g, _mm_sub_ps(one128, ratio)));
+            __m128 out_b = mul_add_ps128(comp_b, ratio,
+                                         _mm_mul_ps(bg_b, _mm_sub_ps(one128, ratio)));
+            store_rgb4(&output, index, out_r, out_g, out_b);
+            store_alpha4(&output, index, bg_a);
+        }
+    }
+#endif
+#endif
+
+    for (; index < pixels; ++index) {
+        npy_intp bg_base = index * background.channels;
+        npy_intp fg_base = index * foreground.channels;
+        npy_intp out_base = index * output.channels;
+
+        rgb_triplet bg = {
+            read_channel(&background, bg_base + 0),
+            read_channel(&background, bg_base + 1),
+            read_channel(&background, bg_base + 2),
+        };
+        rgb_triplet fg = {
+            read_channel(&foreground, fg_base + 0),
+            read_channel(&foreground, fg_base + 1),
+            read_channel(&foreground, fg_base + 2),
+        };
+        float bg_alpha = background.channels == 4
+            ? read_channel(&background, bg_base + 3)
+            : 1.0f;
+        float fg_alpha = foreground.channels == 4
+            ? read_channel(&foreground, fg_base + 3)
+            : 1.0f;
+        float comp_alpha = fminf(bg_alpha, fg_alpha) * opacity;
+        float new_alpha = bg_alpha + (1.0f - bg_alpha) * comp_alpha;
+        float ratio = new_alpha == 0.0f ? 0.0f : comp_alpha / new_alpha;
+        rgb_triplet comp = comp_scalar(bg, fg);
+
+        write_channel(&output, out_base + 0, comp.r * ratio + bg.r * (1.0f - ratio));
+        write_channel(&output, out_base + 1, comp.g * ratio + bg.g * (1.0f - ratio));
+        write_channel(&output, out_base + 2, comp.b * ratio + bg.b * (1.0f - ratio));
+        if (output.channels == 4) {
+            write_channel(&output, out_base + 3, bg_alpha);
+        }
+    }
+    NPY_END_ALLOW_THREADS
+
     Py_XDECREF(kernel_hold);
     release_blend_inputs(&background, &foreground);
     return (PyObject *)output.array;

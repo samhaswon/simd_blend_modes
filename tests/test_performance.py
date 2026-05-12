@@ -8,6 +8,7 @@ from typing import Callable, Dict, List, Tuple
 import numpy as np
 
 import simd_blend_modes
+from additional_blends import additional_blends
 from simd_blend_modes import _simd_blend_modes
 
 from blend_modes import blending_functions as reference
@@ -16,6 +17,23 @@ WRITE_RESULTS_TO_README = True
 README_PATH = Path(__file__).resolve().parents[1] / "README.md"
 PERF_RESULTS_START = "<!-- PERF_RESULTS_START -->"
 PERF_RESULTS_END = "<!-- PERF_RESULTS_END -->"
+
+ADDITIONAL_BLEND_MODE_NAMES = [
+    "hsv_hue",
+    "hsv_saturation",
+    "hsv_value",
+    "hsl_color",
+    "lch_hue",
+    "lch_chroma",
+    "lch_color",
+    "lch_lightness",
+    "burn",
+    "linear_burn",
+    "exclusion",
+    "vivid_light",
+    "pin_light",
+]
+
 
 @dataclass(frozen=True)
 class BenchmarkCase:
@@ -133,6 +151,7 @@ class TestPerformance(unittest.TestCase):
             "grain_merge",
             "divide",
             "overlay",
+            *ADDITIONAL_BLEND_MODE_NAMES,
         ]
         kernels = ["scalar", "sse42", "avx2"]
         available_kernels = [
@@ -182,11 +201,24 @@ class TestPerformance(unittest.TestCase):
                         foreground = foreground_u8
 
                     for mode in modes:
-                        ref_func = getattr(reference, mode)
+                        if mode in ADDITIONAL_BLEND_MODE_NAMES:
+                            ref_func = getattr(additional_blends, mode)
+                        else:
+                            ref_func = getattr(reference, mode)
                         simd_func = getattr(simd_blend_modes, mode)
                         for opacity in opacities:
                             gc.collect()
-                            if channels == 3:
+                            if mode in ADDITIONAL_BLEND_MODE_NAMES:
+                                ref_time = _time_call(
+                                    lambda: _blend_reference(
+                                        ref_func,
+                                        background,
+                                        foreground,
+                                        opacity,
+                                    ),
+                                    iterations,
+                                )
+                            elif channels == 3:
                                 if input_dtype == np.float32:
                                     ref_time = _time_call(
                                         lambda: _blend_reference_with_alpha(
@@ -242,7 +274,15 @@ class TestPerformance(unittest.TestCase):
                                     iterations,
                                 )
                                 speedup = ref_time / simd_time if simd_time > 0 else float("inf")
-                                results[(case.name, input_label, mode, kernel, channels, opacity)] = {
+                                key = (
+                                    case.name,
+                                    input_label,
+                                    mode,
+                                    kernel,
+                                    channels,
+                                    opacity,
+                                )
+                                results[key] = {
                                     "ref_time": ref_time,
                                     "simd_time": simd_time,
                                     "speedup": speedup,
@@ -271,6 +311,9 @@ class TestPerformance(unittest.TestCase):
                                 if key not in results:
                                     continue
                                 entry = results[key]
+                                percent_change = (
+                                    entry["simd_time"] / entry["ref_time"] - 1.0
+                                ) * 100.0
                                 rows.append(
                                     [
                                         case.name,
@@ -282,7 +325,7 @@ class TestPerformance(unittest.TestCase):
                                         f"{entry['ref_time']:.6f}",
                                         f"{entry['simd_time']:.6f}",
                                         f"{entry['speedup']:.2f}x",
-                                        f"{(entry['simd_time'] / entry['ref_time'] - 1.0) * 100.0:.2f}%",
+                                        f"{percent_change:.2f}%",
                                     ]
                                 )
 

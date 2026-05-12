@@ -247,6 +247,123 @@ def overlay(
     """
     ...
 
+def hsv_hue(
+    background: np.ndarray,
+    foreground: np.ndarray,
+    opacity: float = ...,
+    kernel: KernelType = "auto",
+) -> np.ndarray:
+    """Blend using HSV hue mode."""
+    ...
+
+def hsv_saturation(
+    background: np.ndarray,
+    foreground: np.ndarray,
+    opacity: float = ...,
+    kernel: KernelType = "auto",
+) -> np.ndarray:
+    """Blend using HSV saturation mode."""
+    ...
+
+def hsv_value(
+    background: np.ndarray,
+    foreground: np.ndarray,
+    opacity: float = ...,
+    kernel: KernelType = "auto",
+) -> np.ndarray:
+    """Blend using HSV value mode."""
+    ...
+
+def hsl_color(
+    background: np.ndarray,
+    foreground: np.ndarray,
+    opacity: float = ...,
+    kernel: KernelType = "auto",
+) -> np.ndarray:
+    """Blend using HSL color mode."""
+    ...
+
+def lch_hue(
+    background: np.ndarray,
+    foreground: np.ndarray,
+    opacity: float = ...,
+    kernel: KernelType = "auto",
+) -> np.ndarray:
+    """Blend using LCh hue mode."""
+    ...
+
+def lch_chroma(
+    background: np.ndarray,
+    foreground: np.ndarray,
+    opacity: float = ...,
+    kernel: KernelType = "auto",
+) -> np.ndarray:
+    """Blend using LCh chroma mode."""
+    ...
+
+def lch_color(
+    background: np.ndarray,
+    foreground: np.ndarray,
+    opacity: float = ...,
+    kernel: KernelType = "auto",
+) -> np.ndarray:
+    """Blend using LCh color mode."""
+    ...
+
+def lch_lightness(
+    background: np.ndarray,
+    foreground: np.ndarray,
+    opacity: float = ...,
+    kernel: KernelType = "auto",
+) -> np.ndarray:
+    """Blend using LCh lightness mode."""
+    ...
+
+def burn(
+    background: np.ndarray,
+    foreground: np.ndarray,
+    opacity: float = ...,
+    kernel: KernelType = "auto",
+) -> np.ndarray:
+    """Blend using burn mode."""
+    ...
+
+def linear_burn(
+    background: np.ndarray,
+    foreground: np.ndarray,
+    opacity: float = ...,
+    kernel: KernelType = "auto",
+) -> np.ndarray:
+    """Blend using linear burn mode."""
+    ...
+
+def exclusion(
+    background: np.ndarray,
+    foreground: np.ndarray,
+    opacity: float = ...,
+    kernel: KernelType = "auto",
+) -> np.ndarray:
+    """Blend using exclusion mode."""
+    ...
+
+def vivid_light(
+    background: np.ndarray,
+    foreground: np.ndarray,
+    opacity: float = ...,
+    kernel: KernelType = "auto",
+) -> np.ndarray:
+    """Blend using vivid light mode."""
+    ...
+
+def pin_light(
+    background: np.ndarray,
+    foreground: np.ndarray,
+    opacity: float = ...,
+    kernel: KernelType = "auto",
+) -> np.ndarray:
+    """Blend using pin light mode."""
+    ...
+
 def kernel_available(name: KernelType) -> bool:
     """Return True if the requested kernel is supported on this machine.
 

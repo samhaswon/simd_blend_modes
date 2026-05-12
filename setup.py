@@ -14,7 +14,15 @@ elif "arm" in arch or "aarch64" in arch:
     # Likely won't compile on ARM, but just in case
     extra_compile_args += ["-O3", "-flto", "-ffp-contract=fast",]
 else:
-    extra_compile_args += ["-O3", "-march=x86-64", "-mavx2", "-msse4.2", "-flto", "-mfma", "-ffp-contract=fast",]
+    extra_compile_args += [
+        "-O3",
+        "-march=x86-64",
+        "-mavx2",
+        "-msse4.2",
+        "-flto",
+        "-mfma",
+        "-ffp-contract=fast",
+    ]
 
 KERNEL_SOURCES = [
     "src/simd_blend_modes/kernels/normal.c",
@@ -32,6 +40,19 @@ KERNEL_SOURCES = [
     "src/simd_blend_modes/kernels/grain_merge.c",
     "src/simd_blend_modes/kernels/divide.c",
     "src/simd_blend_modes/kernels/overlay.c",
+    "src/simd_blend_modes/kernels/hsv_hue.c",
+    "src/simd_blend_modes/kernels/hsv_saturation.c",
+    "src/simd_blend_modes/kernels/hsv_value.c",
+    "src/simd_blend_modes/kernels/hsl_color.c",
+    "src/simd_blend_modes/kernels/lch_hue.c",
+    "src/simd_blend_modes/kernels/lch_chroma.c",
+    "src/simd_blend_modes/kernels/lch_color.c",
+    "src/simd_blend_modes/kernels/lch_lightness.c",
+    "src/simd_blend_modes/kernels/burn.c",
+    "src/simd_blend_modes/kernels/linear_burn.c",
+    "src/simd_blend_modes/kernels/exclusion.c",
+    "src/simd_blend_modes/kernels/vivid_light.c",
+    "src/simd_blend_modes/kernels/pin_light.c",
 ]
 
 extension = Extension(

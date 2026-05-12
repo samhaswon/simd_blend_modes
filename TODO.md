@@ -2,19 +2,19 @@
 
 ## GIMP
 
-- [ ] HSV
-    - [ ] Hue
-    - [ ] Saturation
-    - [ ] Value
-- [ ] HSL Color
-- [ ] LCh
-    - [ ] Hue
-    - [ ] Chroma
-    - [ ] Color
-    - [ ] Lightness
-- [ ] Burn
-    - [ ] (Normal) Burn
-    - [ ] Linear Burn
-- [ ] Exclusion
-- [ ] Vivid light
-- [ ] Pin light
+- [X] HSV
+    - [X] Hue
+    - [X] Saturation
+    - [X] Value
+- [X] HSL Color
+- [X] LCh
+    - [X] Hue
+    - [X] Chroma
+    - [X] Color
+    - [X] Lightness
+- [X] Burn
+    - [X] (Normal) Burn
+    - [X] Linear Burn
+- [X] Exclusion
+- [X] Vivid light
+- [X] Pin light

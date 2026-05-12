@@ -116,6 +116,19 @@ PyObject *blend_grain_extract(PyObject *self, PyObject *args);
 PyObject *blend_grain_merge(PyObject *self, PyObject *args);
 PyObject *blend_divide(PyObject *self, PyObject *args);
 PyObject *blend_overlay(PyObject *self, PyObject *args);
+PyObject *blend_hsv_hue(PyObject *self, PyObject *args);
+PyObject *blend_hsv_saturation(PyObject *self, PyObject *args);
+PyObject *blend_hsv_value(PyObject *self, PyObject *args);
+PyObject *blend_hsl_color(PyObject *self, PyObject *args);
+PyObject *blend_lch_hue(PyObject *self, PyObject *args);
+PyObject *blend_lch_chroma(PyObject *self, PyObject *args);
+PyObject *blend_lch_color(PyObject *self, PyObject *args);
+PyObject *blend_lch_lightness(PyObject *self, PyObject *args);
+PyObject *blend_burn(PyObject *self, PyObject *args);
+PyObject *blend_linear_burn(PyObject *self, PyObject *args);
+PyObject *blend_exclusion(PyObject *self, PyObject *args);
+PyObject *blend_vivid_light(PyObject *self, PyObject *args);
+PyObject *blend_pin_light(PyObject *self, PyObject *args);
 
 static PyMethodDef module_methods[] = {
     {"normal", blend_normal, METH_VARARGS, "Blend (background, foreground, opacity)."},
@@ -133,6 +146,19 @@ static PyMethodDef module_methods[] = {
     {"grain_merge", blend_grain_merge, METH_VARARGS, "Blend (background, foreground, opacity)."},
     {"divide", blend_divide, METH_VARARGS, "Blend (background, foreground, opacity)."},
     {"overlay", blend_overlay, METH_VARARGS, "Blend (background, foreground, opacity)."},
+    {"hsv_hue", blend_hsv_hue, METH_VARARGS, "Blend (background, foreground, opacity)."},
+    {"hsv_saturation", blend_hsv_saturation, METH_VARARGS, "Blend (background, foreground, opacity)."},
+    {"hsv_value", blend_hsv_value, METH_VARARGS, "Blend (background, foreground, opacity)."},
+    {"hsl_color", blend_hsl_color, METH_VARARGS, "Blend (background, foreground, opacity)."},
+    {"lch_hue", blend_lch_hue, METH_VARARGS, "Blend (background, foreground, opacity)."},
+    {"lch_chroma", blend_lch_chroma, METH_VARARGS, "Blend (background, foreground, opacity)."},
+    {"lch_color", blend_lch_color, METH_VARARGS, "Blend (background, foreground, opacity)."},
+    {"lch_lightness", blend_lch_lightness, METH_VARARGS, "Blend (background, foreground, opacity)."},
+    {"burn", blend_burn, METH_VARARGS, "Blend (background, foreground, opacity)."},
+    {"linear_burn", blend_linear_burn, METH_VARARGS, "Blend (background, foreground, opacity)."},
+    {"exclusion", blend_exclusion, METH_VARARGS, "Blend (background, foreground, opacity)."},
+    {"vivid_light", blend_vivid_light, METH_VARARGS, "Blend (background, foreground, opacity)."},
+    {"pin_light", blend_pin_light, METH_VARARGS, "Blend (background, foreground, opacity)."},
     {"kernel_available", kernel_available, METH_VARARGS, "Check whether a kernel is supported."},
     {NULL, NULL, 0, NULL},
 };
