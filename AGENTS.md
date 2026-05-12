@@ -6,7 +6,9 @@
 
 - Use the default Python `unittest` module for tests in this project.
 
-  - Tests are run with `python3 -m unittest discover tests/`.
+  - Tests are run with `python3 -m unittest discover tests/` by the user.
+    - Specifically, you should not run `tests/test_performance.py` as it takes close to an hour to run.
+    - You should run the rest of the tests or the ones relevant to your changes instead.
   - If an ARM Docker build fails with `exec /bin/sh: exec format error`, enable QEMU/binfmt
     emulation first: `docker run --privileged --rm tonistiigi/binfmt --install arm64`.
 
@@ -16,19 +18,21 @@
   module named `simd_blend_modes._simd_blend_modes`.
 - C kernels live in `src/simd_blend_modes/kernels`, one file per blend mode, with a shared
   helper in `src/simd_blend_modes/kernels/blend_common.h`.
-- Scalar kernels are fully implemented for all blend modes; SIMD paths are scaffolded but not
-  yet implemented.
 - Blend modes identified from `blend_modes/blend_modes/blending_functions.py`:
   `normal`, `soft_light`, `lighten_only`, `screen`, `dodge`, `addition`, `darken_only`,
   `multiply`, `hard_light`, `difference`, `subtract`, `grain_extract`, `grain_merge`,
   `divide`, `overlay`.
-- Scalar kernels now implement the blend math from `blend_modes/blend_modes/blending_functions.py`
+- Additional blend modes (beyond parity with the reference library, `additional_blends/additional_blends.py`):
+  `hsv_hue`, `hsv_saturation`, `hsv_value`, `hsl_color`, `lch_hue`, `lch_chroma`, 
+  `lch_color`, `lch_lightness`, `burn`, `linear_burn`, `exclusion`, `vivid_light`, 
+  `pin_light`
+- Scalar kernels implement the blend math from `blend_modes/blend_modes/blending_functions.py` *and* `additional_blends/additional_blends.py`
   for uint8/float32 NumPy arrays; output dtype and channel count match the background image, missing
   alpha channels are treated as 255 (opaque), and opacity defaults to 1.0 when omitted.
-- Tests in `tests/test_blend_modes.py` now include full exhaustive uint8 and float32 RGBA sweeps
+- Tests in `tests/test_blend_modes.py` include full exhaustive uint8 and float32 RGBA sweeps
   (chunked for memory) plus parity checks against the reference implementation.
-- ARM builds are scalar-only; SIMD intrinsics are x86-only and gated at compile time. CI does not
-  emit ARM artifacts.
+- ARM builds are scalar-only if they work; SIMD intrinsics are x64-only and gated at compile time. CI does not
+  emit ARM artifacts currently.
 
 
 ## Code Style
