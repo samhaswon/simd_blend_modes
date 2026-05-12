@@ -14,47 +14,10 @@ def _compose_alpha(img_in, img_layer, opacity):
     new_alpha = img_in[..., 3] + (1.0 - img_in[..., 3]) * comp_alpha
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        ratio = comp_alpha / new_alpha
+        comp_alpha /= new_alpha
 
-    ratio[np.isnan(ratio)] = 0.0
-    return ratio
-
-
-def _luminosity(rgb):
-    return 0.3 * rgb[..., 0] + 0.59 * rgb[..., 1] + 0.11 * rgb[..., 2]
-
-
-def _clip_color(rgb):
-    luminosity = np.expand_dims(_luminosity(rgb), axis=2)
-    min_channel = np.expand_dims(np.min(rgb, axis=2), axis=2)
-    max_channel = np.expand_dims(np.max(rgb, axis=2), axis=2)
-
-    clipped = rgb.copy()
-
-    min_mask = min_channel[..., 0] < 0.0
-    if np.any(min_mask):
-        clipped[min_mask] = (
-            luminosity[min_mask]
-            + (clipped[min_mask] - luminosity[min_mask])
-            * luminosity[min_mask]
-            / (luminosity[min_mask] - min_channel[min_mask])
-        )
-
-    max_mask = max_channel[..., 0] > 1.0
-    if np.any(max_mask):
-        clipped[max_mask] = (
-            luminosity[max_mask]
-            + (clipped[max_mask] - luminosity[max_mask])
-            * (1.0 - luminosity[max_mask])
-            / (max_channel[max_mask] - luminosity[max_mask])
-        )
-
-    return clipped
-
-
-def _set_luminosity(rgb, luminosity):
-    delta = np.expand_dims(luminosity - _luminosity(rgb), axis=2)
-    return _clip_color(rgb + delta)
+    comp_alpha[np.isnan(comp_alpha)] = 0.0
+    return comp_alpha
 
 
 def _rgb_to_hsv(rgb):
