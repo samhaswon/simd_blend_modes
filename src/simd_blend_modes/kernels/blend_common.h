@@ -4336,34 +4336,133 @@ static inline void hsl_to_rgb_ps256(__m256 h, __m256 s, __m256 l,
     hsv_to_rgb_ps256(h, hsv_s, value, r, g, b);
 }
 
+static inline __m128 pow_2_4_approx_ps128(__m128 value)
+{
+    __m128 x = clamp01_ps128(value);
+    __m128 result = _mm_set1_ps(0.19793557156307165f);
+    result = mul_add_ps128(result, x, _mm_set1_ps(-0.82618495954554561f));
+    result = mul_add_ps128(result, x, _mm_set1_ps(1.4707482247061447f));
+    result = mul_add_ps128(result, x, _mm_set1_ps(-1.531951986866908f));
+    result = mul_add_ps128(result, x, _mm_set1_ps(1.3616148662343013f));
+    result = mul_add_ps128(result, x, _mm_set1_ps(0.33415980439850684f));
+    result = mul_add_ps128(result, x, _mm_set1_ps(-0.0063627038107857969f));
+    result = mul_add_ps128(result, x, _mm_set1_ps(5.8848627581431501e-05f));
+    return clamp01_ps128(result);
+}
+
+static inline __m256 pow_2_4_approx_ps256(__m256 value)
+{
+    __m256 x = clamp01_ps(value);
+    __m256 result = _mm256_set1_ps(0.19793557156307165f);
+    result = mul_add_ps256(result, x, _mm256_set1_ps(-0.82618495954554561f));
+    result = mul_add_ps256(result, x, _mm256_set1_ps(1.4707482247061447f));
+    result = mul_add_ps256(result, x, _mm256_set1_ps(-1.531951986866908f));
+    result = mul_add_ps256(result, x, _mm256_set1_ps(1.3616148662343013f));
+    result = mul_add_ps256(result, x, _mm256_set1_ps(0.33415980439850684f));
+    result = mul_add_ps256(result, x, _mm256_set1_ps(-0.0063627038107857969f));
+    result = mul_add_ps256(result, x, _mm256_set1_ps(5.8848627581431501e-05f));
+    return clamp01_ps(result);
+}
+
+static inline __m128 pow_5_12_mantissa_poly_ps128(__m128 mantissa)
+{
+    __m128 result = _mm_set1_ps(-0.12658664160405411f);
+    result = mul_add_ps128(result, mantissa, _mm_set1_ps(0.52286388692986663f));
+    result = mul_add_ps128(result, mantissa, _mm_set1_ps(-0.94063400040164702f));
+    result = mul_add_ps128(result, mantissa, _mm_set1_ps(1.2349191035162608f));
+    result = mul_add_ps128(result, mantissa, _mm_set1_ps(0.30942415922968802f));
+    return result;
+}
+
+static inline __m256 pow_5_12_mantissa_poly_ps256(__m256 mantissa)
+{
+    __m256 result = _mm256_set1_ps(-0.12658664160405411f);
+    result = mul_add_ps256(result, mantissa, _mm256_set1_ps(0.52286388692986663f));
+    result = mul_add_ps256(result, mantissa, _mm256_set1_ps(-0.94063400040164702f));
+    result = mul_add_ps256(result, mantissa, _mm256_set1_ps(1.2349191035162608f));
+    result = mul_add_ps256(result, mantissa, _mm256_set1_ps(0.30942415922968802f));
+    return result;
+}
+
+static inline float pow_5_12_scale(int remainder, int quotient)
+{
+    static const float scale_table[12] = {
+        1.0f,
+        1.3348398541700344f,
+        1.7817974362806785f,
+        2.3784142300054421f,
+        3.1748021039363992f,
+        4.2378523774371812f,
+        5.6568542494923806f,
+        7.5509945014535473f,
+        10.079368399158986f,
+        13.454342644059432f,
+        17.959392772949972f,
+        23.972913230026901f,
+    };
+    return ldexpf(scale_table[remainder], 5 * quotient);
+}
+
+static inline __m128 pow_1_over_2_4_approx_ps128(__m128 value)
+{
+    float lanes[4], mantissas[4], scales[4];
+    _mm_storeu_ps(lanes, clamp01_ps128(value));
+    for (int i = 0; i < 4; ++i) {
+        int exponent = 0;
+        mantissas[i] = frexpf(lanes[i], &exponent);
+        int quotient = exponent / 12;
+        int remainder = exponent % 12;
+        if (remainder < 0) {
+            remainder += 12;
+            --quotient;
+        }
+        scales[i] = lanes[i] > 0.0f ? pow_5_12_scale(remainder, quotient) : 0.0f;
+    }
+
+    __m128 mantissa = _mm_loadu_ps(mantissas);
+    __m128 scale = _mm_loadu_ps(scales);
+    return clamp01_ps128(_mm_mul_ps(pow_5_12_mantissa_poly_ps128(mantissa), scale));
+}
+
+static inline __m256 pow_1_over_2_4_approx_ps256(__m256 value)
+{
+    float lanes[8], mantissas[8], scales[8];
+    _mm256_storeu_ps(lanes, clamp01_ps(value));
+    for (int i = 0; i < 8; ++i) {
+        int exponent = 0;
+        mantissas[i] = frexpf(lanes[i], &exponent);
+        int quotient = exponent / 12;
+        int remainder = exponent % 12;
+        if (remainder < 0) {
+            remainder += 12;
+            --quotient;
+        }
+        scales[i] = lanes[i] > 0.0f ? pow_5_12_scale(remainder, quotient) : 0.0f;
+    }
+
+    __m256 mantissa = _mm256_loadu_ps(mantissas);
+    __m256 scale = _mm256_loadu_ps(scales);
+    return clamp01_ps(_mm256_mul_ps(pow_5_12_mantissa_poly_ps256(mantissa), scale));
+}
+
 static inline __m128 srgb_to_linear_ps128(__m128 value)
 {
     __m128 threshold = _mm_set1_ps(0.04045f);
     __m128 linear = _mm_div_ps(value, _mm_set1_ps(12.92f));
+    __m128 pow_input = _mm_div_ps(_mm_add_ps(value, _mm_set1_ps(0.055f)),
+                                  _mm_set1_ps(1.055f));
     __m128 pow_mask = _mm_cmpgt_ps(value, threshold);
-    float lanes[4], converted[4];
-    _mm_storeu_ps(lanes, value);
-    for (int i = 0; i < 4; ++i) {
-        converted[i] = lanes[i] > 0.04045f
-            ? powf((lanes[i] + 0.055f) / 1.055f, 2.4f)
-            : 0.0f;
-    }
-    return select_ps128(pow_mask, _mm_loadu_ps(converted), linear);
+    return select_ps128(pow_mask, pow_2_4_approx_ps128(pow_input), linear);
 }
 
 static inline __m256 srgb_to_linear_ps256(__m256 value)
 {
     __m256 threshold = _mm256_set1_ps(0.04045f);
     __m256 linear = _mm256_div_ps(value, _mm256_set1_ps(12.92f));
+    __m256 pow_input = _mm256_div_ps(_mm256_add_ps(value, _mm256_set1_ps(0.055f)),
+                                     _mm256_set1_ps(1.055f));
     __m256 pow_mask = _mm256_cmp_ps(value, threshold, _CMP_GT_OQ);
-    float lanes[8], converted[8];
-    _mm256_storeu_ps(lanes, value);
-    for (int i = 0; i < 8; ++i) {
-        converted[i] = lanes[i] > 0.04045f
-            ? powf((lanes[i] + 0.055f) / 1.055f, 2.4f)
-            : 0.0f;
-    }
-    return select_ps256(pow_mask, _mm256_loadu_ps(converted), linear);
+    return select_ps256(pow_mask, pow_2_4_approx_ps256(pow_input), linear);
 }
 
 static inline __m128 linear_to_srgb_ps128(__m128 value)
@@ -4372,14 +4471,11 @@ static inline __m128 linear_to_srgb_ps128(__m128 value)
     __m128 threshold = _mm_set1_ps(0.0031308f);
     __m128 linear = _mm_mul_ps(clamped, _mm_set1_ps(12.92f));
     __m128 pow_mask = _mm_cmpgt_ps(clamped, threshold);
-    float lanes[4], converted[4];
-    _mm_storeu_ps(lanes, clamped);
-    for (int i = 0; i < 4; ++i) {
-        converted[i] = lanes[i] > 0.0031308f
-            ? 1.055f * powf(lanes[i], 1.0f / 2.4f) - 0.055f
-            : 0.0f;
-    }
-    return select_ps128(pow_mask, _mm_loadu_ps(converted), linear);
+    __m128 pow_part = _mm_sub_ps(
+        _mm_mul_ps(_mm_set1_ps(1.055f), pow_1_over_2_4_approx_ps128(clamped)),
+        _mm_set1_ps(0.055f)
+    );
+    return clamp01_ps128(select_ps128(pow_mask, pow_part, linear));
 }
 
 static inline __m256 linear_to_srgb_ps256(__m256 value)
@@ -4388,14 +4484,11 @@ static inline __m256 linear_to_srgb_ps256(__m256 value)
     __m256 threshold = _mm256_set1_ps(0.0031308f);
     __m256 linear = _mm256_mul_ps(clamped, _mm256_set1_ps(12.92f));
     __m256 pow_mask = _mm256_cmp_ps(clamped, threshold, _CMP_GT_OQ);
-    float lanes[8], converted[8];
-    _mm256_storeu_ps(lanes, clamped);
-    for (int i = 0; i < 8; ++i) {
-        converted[i] = lanes[i] > 0.0031308f
-            ? 1.055f * powf(lanes[i], 1.0f / 2.4f) - 0.055f
-            : 0.0f;
-    }
-    return select_ps256(pow_mask, _mm256_loadu_ps(converted), linear);
+    __m256 pow_part = _mm256_sub_ps(
+        _mm256_mul_ps(_mm256_set1_ps(1.055f), pow_1_over_2_4_approx_ps256(clamped)),
+        _mm256_set1_ps(0.055f)
+    );
+    return clamp01_ps(select_ps256(pow_mask, pow_part, linear));
 }
 
 static inline __m128 xyz_to_lab_component_ps128(__m128 value)
