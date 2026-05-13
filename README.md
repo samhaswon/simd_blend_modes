@@ -40,7 +40,7 @@ Inputs:
 
 - Dtypes: `np.uint8` or `np.float32` only.
 - Value range: 0..255 for both dtypes.
-  - This expects float32 inputs to be cast from uint8, not normalized as well.
+  - Float32 inputs should also use `0..255`; normalized `0..1` float inputs are not supported.
 - Shapes: `H x W x C` with `C` = 3 (RGB) or 4 (RGBA).
 - Output: dtype and channel count match the background image.
 - Alpha: if a source is RGB (3 channels), alpha is treated as 255 (fully opaque).
@@ -48,21 +48,44 @@ Inputs:
 
 Supported blend modes:
 
-- [`normal`](https://en.wikipedia.org/wiki/Blend_modes#Normal_blend_mode)
-- [`soft_light`](https://en.wikipedia.org/wiki/Blend_modes#Soft_Light)
-- [`lighten_only`](https://en.wikipedia.org/wiki/Blend_modes#Lighten_Only)
-- [`screen`](https://en.wikipedia.org/wiki/Blend_modes#Screen)
-- [`dodge`](https://en.wikipedia.org/wiki/Blend_modes#Dodge_and_burn)
-- [`addition`](https://en.wikipedia.org/wiki/Blend_modes#Addition)
-- [`darken_only`](https://en.wikipedia.org/wiki/Blend_modes#Darken_Only)
-- [`multiply`](https://en.wikipedia.org/wiki/Blend_modes#Multiply)
-- [`hard_light`](https://en.wikipedia.org/wiki/Blend_modes#Hard_Light)
-- [`difference`](https://en.wikipedia.org/wiki/Blend_modes#Difference)
-- [`subtract`](https://en.wikipedia.org/wiki/Blend_modes#Subtract)
-- `grain_extract` (known from GIMP)
-- `grain_merge` (known from GIMP)
-- [`divide`](https://en.wikipedia.org/wiki/Blend_modes#Divide)
-- [`overlay`](https://en.wikipedia.org/wiki/Blend_modes#Overlay)
+- Basic blend modes
+  - [`normal`](https://en.wikipedia.org/wiki/Blend_modes#Normal_blend_mode)
+  - [`soft_light`](https://en.wikipedia.org/wiki/Blend_modes#Soft_Light)
+  - [`lighten_only`](https://en.wikipedia.org/wiki/Blend_modes#Lighten_Only)
+  - [`screen`](https://en.wikipedia.org/wiki/Blend_modes#Screen)
+  - [`dodge`](https://en.wikipedia.org/wiki/Blend_modes#Dodge_and_burn)
+  - [`addition`](https://en.wikipedia.org/wiki/Blend_modes#Addition)
+  - [`darken_only`](https://en.wikipedia.org/wiki/Blend_modes#Darken_Only)
+  - [`multiply`](https://en.wikipedia.org/wiki/Blend_modes#Multiply)
+  - [`hard_light`](https://en.wikipedia.org/wiki/Blend_modes#Hard_Light)
+  - [`difference`](https://en.wikipedia.org/wiki/Blend_modes#Difference)
+  - [`subtract`](https://en.wikipedia.org/wiki/Blend_modes#Subtract)
+  - `grain_extract` (known from GIMP)
+  - `grain_merge` (known from GIMP)
+  - [`divide`](https://en.wikipedia.org/wiki/Blend_modes#Divide)
+  - [`overlay`](https://en.wikipedia.org/wiki/Blend_modes#Overlay)
+- Additional blend modes
+  - RGB channel order only:
+    - HSV/HSL modes:
+      - `hsv_hue`
+      - `hsv_saturation`
+      - `hsv_value`
+      - `hsl_color`
+      - For more information about HSV/HSL, see https://en.wikipedia.org/wiki/HSL_and_HSV
+    - LCh modes:
+      - `lch_hue`
+      - `lch_chroma`
+      - `lch_color`
+      - `lch_lightness`
+      - For more information about CIELAB/LCh, see https://en.wikipedia.org/wiki/CIELAB_color_space
+        - Note: due to how the color space works, these paths are relatively slow.
+  - `exclusion`
+  - [`burn`](https://en.wikipedia.org/wiki/Blend_modes#Dodge_and_burn)
+  - [`linear_burn`](https://en.wikipedia.org/wiki/Blend_modes#Dodge_and_burn)
+  - [`vivid_light`](https://en.wikipedia.org/wiki/Blend_modes#Dodge_and_burn)
+  - `pin_light`
+
+Channel-wise modes also work with BGR data if both inputs use BGR. Do not mix RGB and BGR inputs. The HSV/HSL and LCh modes require RGB channel ordering.
 
 You can force a kernel by passing a string (or `KernelKind` value):
 
